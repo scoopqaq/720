@@ -1,32 +1,22 @@
 <script setup>
-import PanoramaViewer from './components/PanoramaViewer.vue'
+import { ref } from 'vue';
+import PanoramaViewer from './components/PanoramaViewer.vue';
+import CreateProject from './components/CreateProject.vue';
+
+// 简单的路由状态: 'create' 或 'view'
+const currentView = ref('create'); 
+// 暂存创建成功的项目 ID
+const activeProjectId = ref(null);
 </script>
 
 <template>
-  <PanoramaViewer />
+  <div>
+    <div style="position:fixed; top:0; right:0; z-index:9999; padding:10px;">
+      <button @click="currentView = 'create'">新建项目</button>
+      <button @click="currentView = 'view'">查看全景</button>
+    </div>
+
+    <CreateProject v-if="currentView === 'create'" />
+    <PanoramaViewer v-else />
+  </div>
 </template>
-
-<style>
-/* 1. 全局重置 */
-* {
-  box-sizing: border-box;
-}
-
-body, html {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden; /* 禁止滚动条 */
-}
-
-/* 2. 关键：强制让 Vue 的挂载点 #app 占满全屏 */
-#app {
-  width: 100vw !important;
-  height: 100vh !important;
-  max-width: none !important; /* 覆盖默认样式的限制 */
-  margin: 0 !important;       /* 覆盖默认样式的居中 */
-  padding: 0 !important;      /* 去掉默认内边距 */
-  display: block;
-}
-</style>

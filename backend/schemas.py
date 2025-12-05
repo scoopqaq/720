@@ -18,17 +18,24 @@ class Hotspot(HotspotBase):
         from_attributes = True
 
 # --- Scene Schemas ---
-class SceneBase(BaseModel):
-    name: str
-
-class SceneCreate(SceneBase):
-    pass # 创建时只需要名字，图片单独传
-
-class Scene(SceneBase):
+class Scene(BaseModel):
     id: int
+    name: str
     image_url: str
     project_id: int
-    hotspots: List[Hotspot] = [] # 嵌套返回热点
+    class Config:
+        from_attributes = True
+
+class ProjectBase(BaseModel):
+    name: str
+    category: str # [新增]
+
+class ProjectCreate(ProjectBase):
+    pass
+
+class Project(ProjectBase):
+    id: int
+    scenes: List[Scene] = []
     class Config:
         from_attributes = True
 

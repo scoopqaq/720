@@ -6,8 +6,9 @@ class Project(Base):
     __tablename__ = "projects"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
+    # [新增] 项目分类 (例如: "家装", "商业空间")
+    category = Column(String, default="其他")
     
-    # 关联：一个项目包含多个场景
     scenes = relationship("Scene", back_populates="project", cascade="all, delete-orphan")
 
 class Scene(Base):
