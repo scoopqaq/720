@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from typing import List, Optional
 
-# --- Hotspot Schemas ---
+# --- Hotspot Schemas (保持不变) ---
 class HotspotBase(BaseModel):
     text: str
     x: float
@@ -10,25 +10,29 @@ class HotspotBase(BaseModel):
     target_scene_id: int
 
 class HotspotCreate(HotspotBase):
-    source_scene_id: int # 创建时需要知道属于哪个房间
+    source_scene_id: int
 
 class Hotspot(HotspotBase):
     id: int
     class Config:
         from_attributes = True
 
-# --- Scene Schemas ---
+# --- Scene Schemas (关键修改) ---
 class Scene(BaseModel):
     id: int
     name: str
     image_url: str
     project_id: int
+    # [修复] 这一行之前弄丢了，导致前端拿不到热点数据列表，必须加回来！
+    hotspots: List[Hotspot] = [] 
+    
     class Config:
         from_attributes = True
 
+# --- Project Schemas (保持不变) ---
 class ProjectBase(BaseModel):
     name: str
-    category: str # [新增]
+    category: str
 
 class ProjectCreate(ProjectBase):
     pass
@@ -36,18 +40,5 @@ class ProjectCreate(ProjectBase):
 class Project(ProjectBase):
     id: int
     scenes: List[Scene] = []
-    class Config:
-        from_attributes = True
-
-# --- Project Schemas ---
-class ProjectBase(BaseModel):
-    name: str
-
-class ProjectCreate(ProjectBase):
-    pass
-
-class Project(ProjectBase):
-    id: int
-    scenes: List[Scene] = [] # 嵌套返回场景
     class Config:
         from_attributes = True

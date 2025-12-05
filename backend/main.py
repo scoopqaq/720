@@ -75,7 +75,12 @@ def create_project_full(
     db.commit()
     db.refresh(db_project)
     return db_project
-
+# [新增] 获取所有项目列表
+@app.get("/projects/", response_model=List[schemas.Project])
+def get_projects(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    # 按 ID 倒序排列（最新的在前面）
+    projects = db.query(models.Project).order_by(models.Project.id.desc()).offset(skip).limit(limit).all()
+    return projects
 # 获取项目详情
 @app.get("/projects/{project_id}", response_model=schemas.Project)
 def read_project(project_id: int, db: Session = Depends(get_db)):
