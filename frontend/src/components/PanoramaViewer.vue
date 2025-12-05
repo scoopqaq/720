@@ -8,11 +8,11 @@
     ></div>
 
     <div class="tip">
-      当前位置: {{ currentRoomId }} | 鼠标左键拖拽 · 滚轮缩放 · 点击红色热点跳转
+      当前位置: {{ currentRoomId }} | 点击红色热点体验平滑穿梭
     </div>
 
     <div v-if="isLoading" class="loading-mask">
-      场景切换中...
+      加载资源中...
     </div>
 
     <div 
@@ -32,19 +32,16 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, reactive } from 'vue';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+// [新增] 引入 GSAP 动画库
+import gsap from 'gsap';
 
-// ==========================================
-// [新增] 1. 房间配置数据
-// 定义每个房间的图片路径和通往其他房间的热点位置
-// 位置坐标 (x, y, z) 大概在 300-450 之间比较合适，因为球半径是 500
-// ==========================================
+// --- 房间配置 (保持不变，请根据你的图片调整) ---
 const roomsConfig = {
   room1: {
     texture: '/room1.jpg',
-    // room1 可以去 2, 3, 4
     hotspots: [
       { target: 'room2', position: [400, 0, 0], text: '去房间2' },
       { target: 'room3', position: [0, 0, 400], text: '去房间3' },
@@ -73,27 +70,25 @@ const roomsConfig = {
   }
 };
 
-// --- 响应式数据 ---
 const containerRef = ref(null);
 const menuVisible = ref(false);
 const menuPos = ref({ x: 0, y: 0 });
 const isRotating = ref(true);
 const isFullscreen = ref(false);
-// [新增] 当前房间 ID
 const currentRoomId = ref('room1');
-// [新增] 加载状态
 const isLoading = ref(false);
+// [新增] 标记是否正在转场动画中，防止重复点击
+const isTransitioning = ref(false);
 
-// --- Three.js 变量 ---
 let scene, camera, renderer, controls, animationId;
-let sphereMesh; // [修改] 全景球体 Mesh 需要提取出来，方便后续换图
 let textureLoader;
-// [新增] 存放所有热点 Mesh 的数组，用于射线检测和清理
-let hotspotMeshes = []; 
-// [新增] 射线检测器和鼠标向量
-const raycaster = new THREE.Raycaster();
-const pointer = new THREE.Vector2();
+let raycaster = new THREE.Raycaster();
+let pointer = new THREE.Vector2();
+let hotspotMeshes = [];
 
+// [新增] 双球体系统变量
+let sphereMesh1, sphereMesh2;
+let activeSphereIndex = 1; // 1 表示 mesh1 活跃，2 表示 mesh2 活跃
 
 const initThree = () => {
   if (!containerRef.value) return;
@@ -109,27 +104,36 @@ const initThree = () => {
   renderer.setPixelRatio(window.devicePixelRatio);
   containerRef.value.appendChild(renderer.domElement);
 
-  // 创建全景球体几何体
+  // --- [关键修改] 创建两个球体 ---
   const geometry = new THREE.SphereGeometry(500, 60, 40);
   geometry.scale(-1, 1, 1);
 
-  // 初始化纹理加载器
+  // 球体 1 (初始活跃)
+  const mat1 = new THREE.MeshBasicMaterial({ map: null, transparent: true, opacity: 1 });
+  sphereMesh1 = new THREE.Mesh(geometry, mat1);
+  sphereMesh1.rotation.y = -Math.PI / 2; // 调整初始角度
+  // renderOrder 控制渲染顺序，防止透明度混合错乱
+  sphereMesh1.renderOrder = 1; 
+  scene.add(sphereMesh1);
+
+  // 球体 2 (初始隐藏)
+  const mat2 = new THREE.MeshBasicMaterial({ map: null, transparent: true, opacity: 0 });
+  sphereMesh2 = new THREE.Mesh(geometry, mat2);
+  sphereMesh2.rotation.y = -Math.PI / 2;
+  sphereMesh2.renderOrder = 0; // 放在后面
+  scene.add(sphereMesh2);
+
   textureLoader = new THREE.TextureLoader();
-  
-  // 创建基础材质（初始为空贴图，稍后在 loadRoom 中加载）
-  const material = new THREE.MeshBasicMaterial({ map: null });
-  sphereMesh = new THREE.Mesh(geometry, material);
-  scene.add(sphereMesh);
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.05;
   controls.autoRotate = true;
-  controls.autoRotateSpeed = 0.5; // 转慢点方便点热点
+  controls.autoRotateSpeed = 0.5;
   controls.enableZoom = false;
 
-  // [新增] 初始加载第一个房间
-  loadRoom(currentRoomId.value);
+  // 初始加载，不带动画
+  loadRoom(currentRoomId.value, false);
 
   animate();
 
@@ -140,113 +144,138 @@ const initThree = () => {
 };
 
 // ==========================================
-// [新增] 2. 加载房间的核心函数
-// 负责：清理旧热点 -> 加载新图片 -> 替换材质 -> 创建新热点
+// [重写] 加载房间逻辑 (支持渐变动画)
 // ==========================================
-const loadRoom = (roomId) => {
+const loadRoom = (roomId, animate = true) => {
+  if (isTransitioning.value && animate) return; // 防止狂点
   const roomData = roomsConfig[roomId];
   if (!roomData) return;
 
-  isLoading.value = true; // 显示加载提示
+  isLoading.value = true;
+  if (animate) isTransitioning.value = true;
 
-  // 2.1 清理当前场景中旧的热点
-  hotspotMeshes.forEach(mesh => {
-    scene.remove(mesh);
-    mesh.geometry.dispose(); // 释放内存
-    mesh.material.dispose();
-  });
-  hotspotMeshes = []; // 清空数组
+  // 1. 确定我们要操作哪个球体
+  // 如果当前是 sphere1 显示，那我们就把新图贴到 sphere2 上，然后淡入 sphere2
+  const currentSphere = activeSphereIndex === 1 ? sphereMesh1 : sphereMesh2;
+  const nextSphere = activeSphereIndex === 1 ? sphereMesh2 : sphereMesh1;
 
-  // 2.2 加载新房间的图片纹理
+  // 2. 隐藏旧热点 (立即隐藏，避免看着热点飘在半空)
+  clearHotspots();
+
+  // 3. 加载图片
   textureLoader.load(
     roomData.texture,
-    // onLoad 回调：图片加载完成时触发
-    (loadedTexture) => {
-      loadedTexture.colorSpace = THREE.SRGBColorSpace;
+    (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace;
       
-      // 替换全景球的贴图
-      sphereMesh.material.map = loadedTexture;
-      // 告诉 Three.js 材质需要更新
-      sphereMesh.material.needsUpdate = true;
+      // 把新图给“下一个球”
+      nextSphere.material.map = texture;
+      nextSphere.material.needsUpdate = true;
+      // 确保它的渲染顺序在最前面，这样淡入时会盖住旧球
+      nextSphere.renderOrder = 1;
+      currentSphere.renderOrder = 0;
 
-      // 2.3 创建新房间的热点
-      if (roomData.hotspots) {
-        roomData.hotspots.forEach(hsConfig => {
-          createHotspot(hsConfig);
-        });
-      }
-
-      // 更新当前状态
-      currentRoomId.value = roomId;
-      isLoading.value = false; // 隐藏加载提示
-    },
-    undefined, // onProgress
-    // onError 回调
-    (err) => {
-      console.error('图片加载失败:', err);
       isLoading.value = false;
-      alert(`加载 ${roomId} 失败，请检查图片路径`);
+
+      if (animate) {
+        // === 动画模式 ===
+        
+        // 确保新球是透明的，然后显示出来
+        nextSphere.material.opacity = 0;
+        nextSphere.visible = true;
+
+        // 使用 GSAP 执行交叉渐变
+        // 1. 新球淡入 (Opacity 0 -> 1)
+        gsap.to(nextSphere.material, {
+          opacity: 1,
+          duration: 1.0, // 动画时间 1秒
+          ease: "power2.inOut",
+          onComplete: () => {
+            // 动画结束后的清理工作
+            currentSphere.visible = false; // 隐藏旧球
+            currentSphere.material.opacity = 0; // 重置旧球透明度
+            
+            // 切换状态索引
+            activeSphereIndex = activeSphereIndex === 1 ? 2 : 1;
+            
+            // 创建新房间的热点
+            createHotspots(roomData.hotspots);
+            currentRoomId.value = roomId;
+            isTransitioning.value = false;
+          }
+        });
+
+      } else {
+        // === 初始加载 (无动画) ===
+        nextSphere.material.opacity = 1;
+        nextSphere.visible = true;
+        currentSphere.visible = false;
+        
+        activeSphereIndex = activeSphereIndex === 1 ? 2 : 1;
+        createHotspots(roomData.hotspots);
+        isLoading.value = false;
+      }
+    },
+    undefined,
+    (err) => {
+      console.error(err);
+      isLoading.value = false;
+      isTransitioning.value = false;
     }
   );
 };
 
-// ==========================================
-// [新增] 3. 创建单个热点的辅助函数
-// ==========================================
-const createHotspot = (hsConfig) => {
-  // 这里用一个简单的红色球体作为热点
-  // 你以后可以换成 Sprite (精灵图) 或者更复杂的模型
-  const geometry = new THREE.SphereGeometry(15, 32, 16);
-  // 设置为红色半透明，且不受光照影响
-  const material = new THREE.MeshBasicMaterial({ 
-    color: 0xff0000,
-    transparent: true,
-    opacity: 0.8
+// [修改] 清理热点
+const clearHotspots = () => {
+  hotspotMeshes.forEach(mesh => {
+    // 使用 GSAP 让热点淡出消失（可选优化）
+    scene.remove(mesh);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
   });
-  const hotspotMesh = new THREE.Mesh(geometry, material);
-  
-  // 设置位置 (解构数组)
-  hotspotMesh.position.set(...hsConfig.position);
-
-  // [关键] 将目标房间信息绑定到 mesh 的 userData 属性上
-  // 这样在点击检测时，我们就能知道这个 mesh 指向哪里
-  hotspotMesh.userData = { targetRoom: hsConfig.target, text: hsConfig.text };
-
-  scene.add(hotspotMesh);
-  // 加入到数组中，方便统一管理和检测
-  hotspotMeshes.push(hotspotMesh);
+  hotspotMeshes = [];
 };
 
-// ==========================================
-// [新增] 4. 点击交互检测 (射线拾取)
-// ==========================================
+// [修改] 批量创建热点
+const createHotspots = (hotspotsData) => {
+  if (!hotspotsData) return;
+  hotspotsData.forEach(hsConfig => {
+    const geometry = new THREE.SphereGeometry(15, 32, 16);
+    const material = new THREE.MeshBasicMaterial({ 
+      color: 0xff0000,
+      transparent: true,
+      opacity: 0 // 初始透明，为了淡入效果
+    });
+    const hotspot = new THREE.Mesh(geometry, material);
+    hotspot.position.set(...hsConfig.position);
+    hotspot.userData = { targetRoom: hsConfig.target, text: hsConfig.text };
+    
+    scene.add(hotspot);
+    hotspotMeshes.push(hotspot);
+
+    // 热点淡入动画
+    gsap.to(material, { opacity: 0.8, duration: 0.5, delay: 0.2 });
+  });
+};
+
 const onPointerDown = (event) => {
+  if (isTransitioning.value) return; // 转场时不许点击
   if (!containerRef.value) return;
 
-  // 1. 将鼠标位置归一化为设备坐标 (NDC)，范围是 -1 到 +1
   const rect = containerRef.value.getBoundingClientRect();
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-  // 2. 通过摄像机和鼠标位置更新射线
   raycaster.setFromCamera(pointer, camera);
-
-  // 3. 计算物体和射线的交点 (只检测热点数组数组)
   const intersects = raycaster.intersectObjects(hotspotMeshes);
 
   if (intersects.length > 0) {
-    // 取第一个交点（最近的那个）
-    const targetObject = intersects[0].object;
-    const targetRoomId = targetObject.userData.targetRoom;
-    
-    console.log('点击了热点，前往:', targetRoomId);
-    
-    // 执行切换房间
-    loadRoom(targetRoomId);
+    const targetRoomId = intersects[0].object.userData.targetRoom;
+    console.log('Jump to:', targetRoomId);
+    loadRoom(targetRoomId, true); // true 表示启用动画
   }
 };
 
-// --- 其他原有函数 (保持不变) ---
 const onMouseWheel = (event) => {
   event.preventDefault();
   let newFov = camera.fov + event.deltaY * 0.05;
@@ -316,19 +345,13 @@ onBeforeUnmount(() => {
   if (containerRef.value) {
     containerRef.value.removeEventListener('wheel', onMouseWheel);
   }
-  if (renderer) {
-    renderer.dispose();
-  }
-  // [新增] 清理热点内存
-  hotspotMeshes.forEach(mesh => {
-    mesh.geometry.dispose();
-    mesh.material.dispose();
-  });
+  if (renderer) renderer.dispose();
+  // 清理 GSAP 动画 (如果有正在运行的)
+  gsap.globalTimeline.clear();
 });
 </script>
 
 <style scoped>
-/* ...原有的样式... */
 .viewer-wrapper {
   position: relative;
   width: 100%;
@@ -340,13 +363,11 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   display: block;
-  /* 设置鼠标样式，提示可以点击 */
-  cursor: grab; 
+  cursor: grab;
 }
 .three-container:active {
   cursor: grabbing;
 }
-
 .tip {
   position: absolute;
   bottom: 20px;
@@ -359,27 +380,20 @@ onBeforeUnmount(() => {
   font-size: 14px;
   pointer-events: none;
   user-select: none;
-  white-space: nowrap;
   z-index: 10;
 }
-
-/* [新增] 加载遮罩层样式 */
 .loading-mask {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0,0,0,0.7);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0,0,0,0.8);
+  padding: 20px 40px;
+  border-radius: 8px;
   color: white;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  font-size: 24px;
+  pointer-events: none;
   z-index: 20;
 }
-
-/* ...原有的右键菜单样式... */
 .context-menu {
   position: absolute;
   z-index: 999;
