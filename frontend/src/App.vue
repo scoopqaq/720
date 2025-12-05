@@ -1,47 +1,32 @@
 <script setup>
-import HelloWorld from './components/HelloWorld.vue'
-import TheWelcome from './components/TheWelcome.vue'
+import PanoramaViewer from './components/PanoramaViewer.vue'
 </script>
 
 <template>
-  <header>
-    <img alt="Vue logo" class="logo" src="./assets/logo.svg" width="125" height="125" />
-
-    <div class="wrapper">
-      <HelloWorld msg="You did it!" />
-    </div>
-  </header>
-
-  <main>
-    <TheWelcome />
-  </main>
+  <PanoramaViewer />
 </template>
 
-<style scoped>
-header {
-  line-height: 1.5;
+<style>
+/* 1. 全局重置 */
+* {
+  box-sizing: border-box;
 }
 
-.logo {
+body, html {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden; /* 禁止滚动条 */
+}
+
+/* 2. 关键：强制让 Vue 的挂载点 #app 占满全屏 */
+#app {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important; /* 覆盖默认样式的限制 */
+  margin: 0 !important;       /* 覆盖默认样式的居中 */
+  padding: 0 !important;      /* 去掉默认内边距 */
   display: block;
-  margin: 0 auto 2rem;
-}
-
-@media (min-width: 1024px) {
-  header {
-    display: flex;
-    place-items: center;
-    padding-right: calc(var(--section-gap) / 2);
-  }
-
-  .logo {
-    margin: 0 2rem 0 0;
-  }
-
-  header .wrapper {
-    display: flex;
-    place-items: flex-start;
-    flex-wrap: wrap;
-  }
 }
 </style>
