@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from typing import List, Optional
 
-# --- Hotspot Schemas (保持不变) ---
+# Hotspot 保持不变...
 class HotspotBase(BaseModel):
     text: str
     x: float
@@ -17,19 +17,31 @@ class Hotspot(HotspotBase):
     class Config:
         from_attributes = True
 
-# --- Scene Schemas (关键修改) ---
+# [修改] Scene 增加视角字段
 class Scene(BaseModel):
     id: int
     name: str
     image_url: str
     project_id: int
-    # [修复] 这一行之前弄丢了，导致前端拿不到热点数据列表，必须加回来！
-    hotspots: List[Hotspot] = [] 
+    hotspots: List[Hotspot] = []
     
+    # 新增字段
+    initial_angle: float
+    initial_fov: float
+    min_polar_angle: float
+    max_polar_angle: float
+
     class Config:
         from_attributes = True
 
-# --- Project Schemas (保持不变) ---
+# [新增] 用于更新 Scene 的模型
+class SceneUpdate(BaseModel):
+    initial_angle: Optional[float] = None
+    initial_fov: Optional[float] = None
+    min_polar_angle: Optional[float] = None
+    max_polar_angle: Optional[float] = None
+
+# Project 保持不变...
 class ProjectBase(BaseModel):
     name: str
     category: str
@@ -42,3 +54,8 @@ class Project(ProjectBase):
     scenes: List[Scene] = []
     class Config:
         from_attributes = True
+
+# [新增] 用于更新 Project 的模型
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None

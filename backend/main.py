@@ -1,6 +1,6 @@
 import os
 import shutil
-from typing import List # 必须引入 List
+from typing import List 
 from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -106,3 +106,41 @@ def delete_hotspot(hotspot_id: int, db: Session = Depends(get_db)):
         db.delete(db_hotspot)
         db.commit()
     return {"ok": True}
+# [新增] 批量删除项目
+@app.post("/projects/batch_delete/")
+def delete_projects(project_ids: List[int], db: Session = Depends(get_db)):
+    # 批量查询并删除
+    db.query(models.Project).filter(models.Project.id.in_(project_ids)).delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True}
+
+# [新增] 更新项目信息 (改名、改分类)
+@app.put("/projects/{project_id}")
+def update_project(project_id: int, project_update: schemas.ProjectUpdate, db: Session = Depends(get_db)):
+    db_project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    if project_update.name is not None:
+        db_project.name = project_update.name
+    if project_update.category is not None:
+        db_project.category = project_update.category
+        
+    db.commit()
+    db.refresh(db_project)
+    return db_project
+
+# [新增] 更新场景设置 (用于编辑器保存视角参数)
+@app.put("/scenes/{scene_id}")
+def update_scene(scene_id: int, scene_update: schemas.SceneUpdate, db: Session = Depends(get_db)):
+    db_scene = db.query(models.Scene).filter(models.Scene.id == scene_id).first()
+    if not db_scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    
+    # 遍历更新字段
+    update_data = scene_update.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_scene, key, value)
+        
+    db.commit()
+    return db_scene

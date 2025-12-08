@@ -90,7 +90,7 @@ const fetchProjectData = async () => {
     projectData.scenes.forEach(scene => {
       config[scene.id] = {
         name: scene.name,
-        texture: `http://127.0.0.1:8000${scene.image_url}`,
+        texture: `http://127.0.0.1:8000${scene.image_url}?t=${new Date().getTime()}`,
         // [修改] 加一个 || [] 的判断
         // 意思是：如果 scene.hotspots 是 undefined，就用空数组 [] 代替，防止报错
         hotspots: (scene.hotspots || []).map(h => ({
@@ -144,6 +144,7 @@ const initThree = (initialRoomId) => {
   scene.add(sphereMesh2);
 
   textureLoader = new THREE.TextureLoader();
+  textureLoader.setCrossOrigin('anonymous');
   raycaster = new THREE.Raycaster();
   pointer = new THREE.Vector2();
 
