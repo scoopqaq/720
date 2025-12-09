@@ -11,13 +11,7 @@
         </div>
         <div class="header-actions">
           <button class="btn-text" @click="resetToDefaults">↺ 恢复默认</button>
-          
-          <button 
-            class="save-primary-btn" 
-            :class="{ 'has-changes': isModified }"
-            @click="saveAll" 
-            :disabled="saving"
-          >
+          <button class="save-primary-btn" :class="{ 'has-changes': isModified }" @click="saveAll" :disabled="saving">
             {{ saving ? '保存中...' : (isModified ? '💾 保存*' : '💾 已保存') }}
           </button>
         </div>
@@ -36,6 +30,7 @@
     <div class="sidebar">
       <div class="panel-header">全景参数配置</div>
       <div class="panel-body" v-if="currentScene">
+        
         <div class="section-block">
           <h3>1. 初始视角 & 封面</h3>
           <p class="desc">调整画面到最佳角度，点击下方按钮记录。</p>
@@ -49,7 +44,9 @@
             <div class="tag">FOV: {{ Math.round(settings.fov_default) }}</div>
           </div>
         </div>
+
         <hr class="divider">
+
         <div class="section-block">
           <h3>2. 缩放范围 (FOV)</h3>
           <div class="control-row">
@@ -61,235 +58,257 @@
             <input type="range" :min="settings.fov_min" :max="settings.fov_max" v-model.number="settings.fov_default" @input="updateCameraFOV">
           </div>
         </div>
+
         <hr class="divider">
+
         <div class="section-block">
           <h3>3. 视角旋转限制</h3>
+          
           <div class="control-row">
-            <div class="label-row"><label>水平限制</label><span class="status-tag" v-if="isFullHorizontal">360° 无限</span></div>
+            <div class="label-row">
+              <label>水平限制 (Horizontal)</label>
+              <span class="status-tag" v-if="isFullHorizontal">360° 无限旋转</span>
+            </div>
             <DualSlider :min="-180" :max="180" v-model="hLimitRange" @change="onHLimitChange" @preview="onHLimitPreview" />
             <div class="val-display">{{ settings.limit_h_min }}° ~ {{ settings.limit_h_max }}°</div>
           </div>
+
           <div class="control-row">
-            <label>垂直限制</label>
+            <label>垂直限制 (Vertical)</label>
             <DualSlider :min="-90" :max="90" v-model="vLimitRange" @change="onVLimitChange" @preview="onVLimitPreview" />
-            <div class="val-display">{{ settings.limit_v_min }}° (底) ~ {{ settings.limit_v_max }}° (顶)</div>
+            <div class="val-display">
+               {{ settings.limit_v_min }}°  ~ {{ settings.limit_v_max }}°
+            </div>
           </div>
         </div>
+
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-  import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
-  import * as THREE from 'three';
-  import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-  import DualSlider from './DualSlider.vue';
-  
-  const props = defineProps(['projectId']);
-  const emit = defineEmits(['back']);
-  
-  const scenes = ref([]);
-  const currentScene = ref(null);
-  const containerRef = ref(null);
-  const saving = ref(false);
-  
-  const DEFAULT_SETTINGS = {
-    initial_heading: 0,
-    initial_pitch: 0,
-    fov_min: 70,
-    fov_max: 120,
-    fov_default: 95,
-    limit_h_min: -180,
-    limit_h_max: 180,
-    limit_v_min: -90,
-    limit_v_max: 90,
-  };
-  
-  const settings = reactive({ ...DEFAULT_SETTINGS });
-  
-  // [修复 1] 使用 ref 代替普通 let，让对比基准也具有响应性
-  const originalSettingsJson = ref(JSON.stringify(DEFAULT_SETTINGS));
-  
-  const fovRange = computed({
-    get: () => [settings.fov_min, settings.fov_max],
-    set: (val) => { settings.fov_min = val[0]; settings.fov_max = val[1]; }
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import DualSlider from './DualSlider.vue';
+
+const props = defineProps(['projectId']);
+const emit = defineEmits(['back']);
+
+const scenes = ref([]);
+const currentScene = ref(null);
+const containerRef = ref(null);
+const saving = ref(false);
+
+const DEFAULT_SETTINGS = {
+  initial_heading: 0,
+  initial_pitch: 0,
+  fov_min: 70,
+  fov_max: 120,
+  fov_default: 95,
+  limit_h_min: -180,
+  limit_h_max: 180,
+  limit_v_min: -90,
+  limit_v_max: 90,
+};
+
+const settings = reactive({ ...DEFAULT_SETTINGS });
+const originalSettingsJson = ref(JSON.stringify(DEFAULT_SETTINGS));
+
+const fovRange = computed({
+  get: () => [settings.fov_min, settings.fov_max],
+  set: (val) => { settings.fov_min = val[0]; settings.fov_max = val[1]; }
+});
+const hLimitRange = computed({
+  get: () => [settings.limit_h_min, settings.limit_h_max],
+  set: (val) => { settings.limit_h_min = val[0]; settings.limit_h_max = val[1]; }
+});
+const vLimitRange = computed({
+  get: () => [settings.limit_v_min, settings.limit_v_max],
+  set: (val) => { settings.limit_v_min = val[0]; settings.limit_v_max = val[1]; }
+});
+const isFullHorizontal = computed(() => settings.limit_h_min <= -180 && settings.limit_h_max >= 180);
+
+const isModified = computed(() => {
+  return JSON.stringify(settings) !== originalSettingsJson.value;
+});
+
+let scene, camera, renderer, controls, sphereMesh, textureLoader, animationId;
+const menuVisible = ref(false);
+const menuPos = ref({ x: 0, y: 0 });
+const isReverse = ref(false);
+
+const fetchProject = async () => {
+  try {
+    const res = await fetch(`http://127.0.0.1:8000/projects/${props.projectId}`);
+    const data = await res.json();
+    scenes.value = data.scenes || [];
+    if (scenes.value.length > 0) loadScene(scenes.value[0].id);
+  } catch(e) { console.error(e); }
+};
+
+const loadScene = (sceneId) => {
+  const target = scenes.value.find(s => s.id == sceneId);
+  if (!target) return;
+  currentScene.value = target;
+
+  Object.keys(DEFAULT_SETTINGS).forEach(key => {
+    settings[key] = target[key] ?? DEFAULT_SETTINGS[key];
   });
-  const hLimitRange = computed({
-    get: () => [settings.limit_h_min, settings.limit_h_max],
-    set: (val) => { settings.limit_h_min = val[0]; settings.limit_h_max = val[1]; }
-  });
-  const vLimitRange = computed({
-    get: () => [settings.limit_v_min, settings.limit_v_max],
-    set: (val) => { settings.limit_v_min = val[0]; settings.limit_v_max = val[1]; }
-  });
-  const isFullHorizontal = computed(() => settings.limit_h_min <= -180 && settings.limit_h_max >= 180);
   
-  // [修复 2] 对比逻辑改为 .value
-  const isModified = computed(() => {
-    return JSON.stringify(settings) !== originalSettingsJson.value;
-  });
-  
-  let scene, camera, renderer, controls, sphereMesh, textureLoader, animationId;
-  const menuVisible = ref(false);
-  const menuPos = ref({ x: 0, y: 0 });
-  const isReverse = ref(false);
-  
-  const fetchProject = async () => {
-    try {
-      const res = await fetch(`http://127.0.0.1:8000/projects/${props.projectId}`);
-      const data = await res.json();
-      scenes.value = data.scenes || [];
-      if (scenes.value.length > 0) loadScene(scenes.value[0].id);
-    } catch(e) { console.error(e); }
-  };
-  
-  const loadScene = (sceneId) => {
-    const target = scenes.value.find(s => s.id == sceneId);
-    if (!target) return;
-    currentScene.value = target;
-  
-    Object.keys(DEFAULT_SETTINGS).forEach(key => {
-      settings[key] = target[key] ?? DEFAULT_SETTINGS[key];
-    });
-    
-    // [修复 3] 加载完成后，更新对比基准
-    originalSettingsJson.value = JSON.stringify(settings);
-  
-    if (!renderer) initThree();
-  
-    textureLoader.load(
-      `http://127.0.0.1:8000${target.image_url}?t=${Date.now()}`,
-      (tex) => {
-        tex.colorSpace = THREE.SRGBColorSpace;
-        sphereMesh.material.map = tex;
-        sphereMesh.material.needsUpdate = true;
-        controls.reset();
-        applyAllSettingsToThree();
-      }
-    );
-  };
-  
-  const initThree = () => {
-    const width = containerRef.value.clientWidth;
-    const height = containerRef.value.clientHeight;
-    scene = new THREE.Scene();
-    camera = new THREE.PerspectiveCamera(settings.fov_default, width / height, 0.1, 1000);
-    camera.position.set(0, 0, 0.1);
-    renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-    renderer.setSize(width, height);
-    containerRef.value.appendChild(renderer.domElement);
-    
-    const geo = new THREE.SphereGeometry(500, 60, 40);
-    geo.scale(-1, 1, 1);
-    sphereMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial());
-    sphereMesh.rotation.y = -Math.PI / 2; 
-    scene.add(sphereMesh);
-  
-    textureLoader = new THREE.TextureLoader();
-    textureLoader.setCrossOrigin('anonymous');
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.1;
-    controls.enableZoom = false; 
-    controls.rotateSpeed = 0.5;
-  
-    containerRef.value.addEventListener('wheel', onMouseWheel, { passive: false });
-    animate();
-    window.addEventListener('resize', onResize);
-    window.addEventListener('click', () => menuVisible.value = false);
-  };
-  
-  const applyAllSettingsToThree = () => {
-    if (!controls) return;
-    camera.fov = settings.fov_default;
-    camera.updateProjectionMatrix();
-  
-    const azimuth = settings.initial_heading * (Math.PI / 180);
-    const polar = (90 - settings.initial_pitch) * (Math.PI / 180);
-    const r = 0.1;
-    camera.position.x = r * Math.sin(polar) * Math.sin(azimuth);
-    camera.position.y = r * Math.cos(polar);
-    camera.position.z = r * Math.sin(polar) * Math.cos(azimuth);
-    controls.target.set(0,0,0);
-    
-    applyLimits();
-    controls.update();
-  };
-  
-  const applyLimits = () => {
-    if (!controls) return;
-    if (settings.limit_h_min <= -180 && settings.limit_h_max >= 180) {
-      controls.minAzimuthAngle = -Infinity; controls.maxAzimuthAngle = Infinity;
-    } else {
-      controls.minAzimuthAngle = settings.limit_h_min * (Math.PI / 180);
-      controls.maxAzimuthAngle = settings.limit_h_max * (Math.PI / 180);
+  originalSettingsJson.value = JSON.stringify(settings);
+
+  if (!renderer) initThree();
+
+  textureLoader.load(
+    `http://127.0.0.1:8000${target.image_url}?t=${Date.now()}`,
+    (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      sphereMesh.material.map = tex;
+      sphereMesh.material.needsUpdate = true;
+      controls.reset();
+      applyAllSettingsToThree();
     }
-    controls.minPolarAngle = (90 - settings.limit_v_max) * (Math.PI / 180);
-    controls.maxPolarAngle = (90 - settings.limit_v_min) * (Math.PI / 180);
-    controls.update();
-  };
+  );
+};
+
+const initThree = () => {
+  const width = containerRef.value.clientWidth;
+  const height = containerRef.value.clientHeight;
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(settings.fov_default, width / height, 0.1, 1000);
+  camera.position.set(0, 0, 0.1);
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setSize(width, height);
+  containerRef.value.appendChild(renderer.domElement);
   
-  const onFovPreview = ({ value }) => { camera.fov = value; camera.updateProjectionMatrix(); };
-  const onFovRangeChange = () => {
-    if (settings.fov_default < settings.fov_min) settings.fov_default = settings.fov_min;
-    if (settings.fov_default > settings.fov_max) settings.fov_default = settings.fov_max;
-    updateCameraFOV();
-  };
-  const onHLimitPreview = ({ value }) => {
-    const rad = value * (Math.PI / 180);
+  const geo = new THREE.SphereGeometry(500, 60, 40);
+  geo.scale(-1, 1, 1);
+  sphereMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial());
+  sphereMesh.rotation.y = -Math.PI / 2;
+  scene.add(sphereMesh);
+
+  textureLoader = new THREE.TextureLoader();
+  textureLoader.setCrossOrigin('anonymous');
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+  controls.enableZoom = false; 
+  controls.rotateSpeed = 0.5;
+
+  containerRef.value.addEventListener('wheel', onMouseWheel, { passive: false });
+  animate();
+  window.addEventListener('resize', onResize);
+  window.addEventListener('click', () => menuVisible.value = false);
+};
+
+const applyAllSettingsToThree = () => {
+  if (!controls) return;
+  camera.fov = settings.fov_default;
+  camera.updateProjectionMatrix();
+
+  const azimuth = settings.initial_heading * (Math.PI / 180);
+  // 公式：Polar = (90 - Pitch) * (PI/180)
+  const polar = (90 - settings.initial_pitch) * (Math.PI / 180);
+
+  const r = 0.1;
+  camera.position.x = r * Math.sin(polar) * Math.sin(azimuth);
+  camera.position.y = r * Math.cos(polar);
+  camera.position.z = r * Math.sin(polar) * Math.cos(azimuth);
+  controls.target.set(0,0,0);
+  
+  applyLimits();
+  controls.update();
+};
+
+const applyLimits = () => {
+  if (!controls) return;
+
+  if (settings.limit_h_min <= -180 && settings.limit_h_max >= 180) {
     controls.minAzimuthAngle = -Infinity; controls.maxAzimuthAngle = Infinity;
-    const polar = controls.getPolarAngle();
-    const r = 0.1;
-    camera.position.x = r * Math.sin(polar) * Math.sin(rad);
-    camera.position.z = r * Math.sin(polar) * Math.cos(rad);
-    controls.update();
-  };
-  const onHLimitChange = () => applyLimits();
-  const onVLimitPreview = ({ value }) => {
-    const polarRad = (90 - value) * (Math.PI / 180);
-    controls.minPolarAngle = 0; controls.maxPolarAngle = Math.PI;
-    const azimuth = controls.getAzimuthalAngle();
-    const r = 0.1;
-    camera.position.x = r * Math.sin(polarRad) * Math.sin(azimuth);
-    camera.position.y = r * Math.cos(polarRad);
-    camera.position.z = r * Math.sin(polarRad) * Math.cos(azimuth);
-    controls.update();
-  };
-  const onVLimitChange = () => applyLimits();
+  } else {
+    controls.minAzimuthAngle = settings.limit_h_min * (Math.PI / 180);
+    controls.maxAzimuthAngle = settings.limit_h_max * (Math.PI / 180);
+  }
+
+  // [修正点：反转映射]
+  // 左滑块 (limit_v_min) -> 控制底部限制 -> 对应 Three.js 的 maxPolarAngle (接近 PI/180度)
+  // 公式: (90 - (-90)) = 180 -> PI
+  controls.maxPolarAngle = (90 - settings.limit_v_min) * (Math.PI / 180);
+
+  // 右滑块 (limit_v_max) -> 控制顶部限制 -> 对应 Three.js 的 minPolarAngle (接近 0度)
+  // 公式: (90 - 90) = 0 -> 0
+  controls.minPolarAngle = (90 - settings.limit_v_max) * (Math.PI / 180);
   
-  const captureInitialState = () => {
-    const azimuth = controls.getAzimuthalAngle(); 
-    const polar = controls.getPolarAngle(); 
-    settings.initial_heading = azimuth * (180 / Math.PI);
-    settings.initial_pitch = 90 - (polar * (180 / Math.PI));
-    settings.fov_default = camera.fov;
-  };
+  controls.update();
+};
+
+const onFovPreview = ({ value }) => { camera.fov = value; camera.updateProjectionMatrix(); };
+const onFovRangeChange = () => {
+  if (settings.fov_default < settings.fov_min) settings.fov_default = settings.fov_min;
+  if (settings.fov_default > settings.fov_max) settings.fov_default = settings.fov_max;
+  updateCameraFOV();
+};
+
+const onHLimitPreview = ({ value }) => {
+  const rad = value * (Math.PI / 180);
+  controls.minAzimuthAngle = -Infinity; controls.maxAzimuthAngle = Infinity;
+  const polar = controls.getPolarAngle();
+  const r = 0.1;
+  camera.position.x = r * Math.sin(polar) * Math.sin(rad);
+  camera.position.z = r * Math.sin(polar) * Math.cos(rad);
+  controls.update();
+};
+const onHLimitChange = () => applyLimits();
+
+const onVLimitPreview = ({ type, value }) => {
+  // [修正点：预览计算]
+  // 无论是 Min 还是 Max，Three.js 的 Polar 都是 (90 - value)
+  const polarRad = (90 - value) * (Math.PI / 180);
   
-  const captureCover = async () => {
-    renderer.render(scene, camera);
-    const dataUrl = renderer.domElement.toDataURL('image/jpeg', 0.7);
-    try {
-      const res = await fetch('http://127.0.0.1:8000/upload_base64/', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image_data: dataUrl })
-      });
-      const data = await res.json();
-      await fetch(`http://127.0.0.1:8000/scenes/${currentScene.value.id}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cover_url: data.url })
-      });
-      alert("封面已更新！");
-    } catch(e) { alert("上传失败"); }
-  };
+  // 解除限制以便预览
+  controls.minPolarAngle = 0; controls.maxPolarAngle = Math.PI;
   
-// src/components/PanoramaEditor.vue
+  const azimuth = controls.getAzimuthalAngle();
+  const r = 0.1;
+  camera.position.x = r * Math.sin(polarRad) * Math.sin(azimuth);
+  camera.position.y = r * Math.cos(polarRad);
+  camera.position.z = r * Math.sin(polarRad) * Math.cos(azimuth);
+  controls.update();
+};
+const onVLimitChange = () => applyLimits();
+
+const captureInitialState = () => {
+  const azimuth = controls.getAzimuthalAngle(); 
+  const polar = controls.getPolarAngle(); 
+  settings.initial_heading = azimuth * (180 / Math.PI);
+  // 修正保存逻辑: Pitch = 90 - (Polar * 180/PI)
+  settings.initial_pitch = 90 - (polar * (180 / Math.PI));
+  settings.fov_default = camera.fov;
+};
+
+const captureCover = async () => {
+  renderer.render(scene, camera);
+  const dataUrl = renderer.domElement.toDataURL('image/jpeg', 0.7);
+  try {
+    const res = await fetch('http://127.0.0.1:8000/upload_base64/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image_data: dataUrl })
+    });
+    const data = await res.json();
+    await fetch(`http://127.0.0.1:8000/scenes/${currentScene.value.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cover_url: data.url })
+    });
+    alert("封面已更新！");
+  } catch(e) { alert("上传失败"); }
+};
 
 const saveAll = async () => {
   saving.value = true;
   try {
     const payload = { ...settings };
     
-    console.log("正在保存:", payload); // [调试] 在控制台打印发送的数据
-    console.log("目标URL:", `http://127.0.0.1:8000/scenes/${currentScene.value.id}`);
+    console.log("正在保存:", payload);
 
     const res = await fetch(`http://127.0.0.1:8000/scenes/${currentScene.value.id}`, {
       method: 'PUT',
@@ -298,103 +317,86 @@ const saveAll = async () => {
     });
     
     if (res.ok) {
-      // 成功：更新对比副本，按钮变色
       originalSettingsJson.value = JSON.stringify(settings);
       console.log("保存成功！");
     } else {
-      // 失败：打印错误
       const errText = await res.text();
-      console.error("保存失败，后端返回:", errText);
+      console.error("保存失败:", errText);
       alert("保存失败: " + errText);
     }
   } catch(e) {
-    console.error("请求发送失败:", e);
-    alert("网络请求失败，请检查后端是否启动");
+    console.error("请求失败:", e);
+    alert("网络请求失败");
   } finally {
     saving.value = false;
   }
 };
-  
-  const handleBack = () => {
-    if (isModified.value) {
-      const confirmLeave = confirm("您有未保存的修改，确定要离开吗？");
-      if (!confirmLeave) return;
-    }
-    emit('back');
-  };
-  
-  const resetToDefaults = () => {
-    if(!confirm("恢复默认?")) return;
-    Object.assign(settings, DEFAULT_SETTINGS);
-    applyAllSettingsToThree();
-  };
-  
-  const updateCameraFOV = () => { if(camera) { camera.fov = settings.fov_default; camera.updateProjectionMatrix(); } };
-  const onMouseWheel = (e) => {
+
+const handleBack = () => {
+  if (isModified.value) {
+    const confirmLeave = confirm("您有未保存的修改，确定要离开吗？");
+    if (!confirmLeave) return;
+  }
+  emit('back');
+};
+
+const resetToDefaults = () => {
+  if(!confirm("恢复默认?")) return;
+  Object.assign(settings, DEFAULT_SETTINGS);
+  applyAllSettingsToThree();
+};
+
+const updateCameraFOV = () => { if(camera) { camera.fov = settings.fov_default; camera.updateProjectionMatrix(); } };
+const onMouseWheel = (e) => {
+  e.preventDefault();
+  let newFov = camera.fov + e.deltaY * 0.05;
+  newFov = Math.max(settings.fov_min, Math.min(settings.fov_max, newFov));
+  camera.fov = newFov;
+  camera.updateProjectionMatrix();
+};
+const animate = () => { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); };
+const onResize = () => { if(containerRef.value) { camera.aspect = containerRef.value.clientWidth / containerRef.value.clientHeight; camera.updateProjectionMatrix(); renderer.setSize(containerRef.value.clientWidth, containerRef.value.clientHeight); } };
+const onContextMenu = (e) => { e.preventDefault(); menuPos.value = {x:e.clientX, y:e.clientY}; menuVisible.value = true; };
+const toggleDirection = () => { isReverse.value = !isReverse.value; controls.rotateSpeed = isReverse.value ? -0.5 : 0.5; };
+const resetView = () => applyAllSettingsToThree();
+
+const onBeforeUnload = (e) => {
+  if (isModified.value) {
     e.preventDefault();
-    let newFov = camera.fov + e.deltaY * 0.05;
-    newFov = Math.max(settings.fov_min, Math.min(settings.fov_max, newFov));
-    camera.fov = newFov;
-    camera.updateProjectionMatrix();
-  };
-  const animate = () => { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); };
-  const onResize = () => { if(containerRef.value) { camera.aspect = containerRef.value.clientWidth / containerRef.value.clientHeight; camera.updateProjectionMatrix(); renderer.setSize(containerRef.value.clientWidth, containerRef.value.clientHeight); } };
-  const onContextMenu = (e) => { e.preventDefault(); menuPos.value = {x:e.clientX, y:e.clientY}; menuVisible.value = true; };
-  const toggleDirection = () => { isReverse.value = !isReverse.value; controls.rotateSpeed = isReverse.value ? -0.5 : 0.5; };
-  const resetView = () => applyAllSettingsToThree();
-  
-  const onBeforeUnload = (e) => {
-    if (isModified.value) {
-      e.preventDefault();
-      e.returnValue = ''; 
-    }
-  };
-  
-  onMounted(() => {
-    fetchProject();
-    window.addEventListener('beforeunload', onBeforeUnload);
-  });
-  
-  onBeforeUnmount(() => {
-    window.removeEventListener('beforeunload', onBeforeUnload);
-    cancelAnimationFrame(animationId);
-    window.removeEventListener('resize', onResize);
-    if (renderer) renderer.dispose();
-  });
-  </script>
+    e.returnValue = ''; 
+  }
+};
+
+onMounted(() => {
+  fetchProject();
+  window.addEventListener('beforeunload', onBeforeUnload);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', onBeforeUnload);
+  cancelAnimationFrame(animationId);
+  window.removeEventListener('resize', onResize);
+  if (renderer) renderer.dispose();
+});
+</script>
 
 <style scoped>
-/* 样式复用之前的，增加一点按钮状态样式 */
+/* 样式保持不变 */
 .editor-layout { display: flex; height: 100vh; background: #1a1a1a; color: #ccc; user-select: none; }
 .viewport { flex: 1; position: relative; background: #000; }
 .three-container { width: 100%; height: 100%; }
-.viewport-header {
-  position: absolute; top: 0; left: 0; right: 0; height: 50px;
-  background: rgba(30,30,30,0.9); border-bottom: 1px solid #333;
-  display: flex; justify-content: space-between; align-items: center; padding: 0 20px; z-index: 10;
-}
+.viewport-header { position: absolute; top: 0; left: 0; right: 0; height: 50px; background: rgba(30,30,30,0.9); border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; z-index: 10; }
 .back-btn, .btn-text { background: none; border: none; color: #aaa; cursor: pointer; font-size: 13px; }
 .back-btn:hover, .btn-text:hover { color: white; }
-
 .scene-name { font-weight: bold; color: white; margin-right: 10px; }
 .modified-dot { color: #e74c3c; font-size: 20px; line-height: 1; }
-
-.save-primary-btn { 
-  background: #333; color: #888; border: 1px solid #444; padding: 6px 16px; 
-  border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;
-  transition: all 0.3s;
-}
-/* 有修改时的高亮状态 */
-.save-primary-btn.has-changes {
-  background: #e67e22; color: white; border-color: #d35400; box-shadow: 0 0 8px rgba(230, 126, 34, 0.4);
-}
+.save-primary-btn { background: #333; color: #888; border: 1px solid #444; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px; transition: all 0.3s; }
+.save-primary-btn.has-changes { background: #e67e22; color: white; border-color: #d35400; box-shadow: 0 0 8px rgba(230, 126, 34, 0.4); }
 .save-primary-btn:hover { opacity: 0.9; }
-
 .center-cross { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: rgba(255,255,255,0.3); font-size: 20px; pointer-events: none; }
 .context-menu { position: fixed; z-index: 9999; background: #333; border: 1px solid #444; border-radius: 4px; padding: 5px 0; min-width: 160px; }
 .context-menu .item { padding: 8px 15px; font-size: 13px; color: #ddd; cursor: pointer; }
 .context-menu .item:hover { background: #444; }
-
 .sidebar { width: 340px; background: #252526; border-left: 1px solid #333; display: flex; flex-direction: column; box-shadow: -5px 0 15px rgba(0,0,0,0.3); }
 .panel-header { height: 50px; line-height: 50px; padding: 0 20px; font-weight: bold; background: #2d2d2d; border-bottom: 1px solid #333; color: #eee; }
 .panel-body { flex: 1; padding: 20px; overflow-y: auto; }
