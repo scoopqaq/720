@@ -5,28 +5,81 @@
     @contextmenu.prevent="onBgContextMenu"
   >
     <div class="content-container">
-      <div class="toolbar">
-        <div class="left-tools">
-          <h2>作品库</h2>
-          <div class="category-tabs">
-             <span :class="{active: filterCategory === ''}" @click="filterCategory = ''">全部</span>
-            <span v-for="cat in availableCategories" :key="cat" :class="{active: filterCategory === cat}" @click="filterCategory = cat">{{ cat }}</span>
+      
+      <div class="toolbar-container">
+        
+        <div class="toolbar-top">
+          <div class="title-group">
+            <h2>作品库</h2>
+            <span class="count-badge">{{ filteredProjects.length }}</span>
+          </div>
+          
+          <div class="actions-group">
+            <div class="search-box">
+              <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <input 
+                v-model="searchQuery" 
+                type="text" 
+                placeholder="搜索作品名称..." 
+                class="search-input"
+              >
+              <button v-if="searchQuery" class="clear-btn" @click="searchQuery = ''">×</button>
+            </div>
+
+            <div class="sort-box">
+              <span class="label">排序:</span>
+              <select v-model="sortBy" class="sort-select">
+                <option value="created_desc">📅 创建时间 (最新)</option>
+                <option value="created_asc">📅 创建时间 (最早)</option>
+                <option value="updated_desc">🕒 最后修改 (最近)</option>
+                <option value="name_asc">🔤 名称 (A-Z)</option>
+                <option value="category">📂 分类</option>
+              </select>
+            </div>
+
+            <transition name="fade">
+              <div v-if="isSelectionMode || selectedIds.length > 0" class="batch-actions">
+                <span class="sel-count">选中 {{ selectedIds.length }}</span>
+                <button class="btn btn-danger small" @click="confirmBatchDelete">删除</button>
+                <button class="btn btn-text small" @click="exitSelectionMode">取消</button>
+              </div>
+            </transition>
+
+            <button v-if="!isSelectionMode" class="btn btn-primary" @click="$emit('go-upload')">
+              + 新建
+            </button>
           </div>
         </div>
 
-        <div class="right-tools">
-           <transition name="fade">
-             <div v-if="isSelectionMode || selectedIds.length > 0" class="selection-tools">
-               <span class="selected-count">已选 {{ selectedIds.length }} 项</span>
-               <button class="btn btn-danger" @click="confirmBatchDelete" :disabled="selectedIds.length === 0">删除选中</button>
-               <button class="btn btn-text" @click="exitSelectionMode">取消多选</button>
-             </div>
-           </transition>
-           <button v-if="!isSelectionMode" class="btn btn-primary" @click="$emit('go-upload')">+ 新建作品</button>
+        <div class="toolbar-bottom">
+          <div class="category-tabs">
+             <span 
+              :class="{active: filterCategory === ''}" 
+              @click="filterCategory = ''"
+            >全部</span>
+            <span 
+              v-for="cat in availableCategories" 
+              :key="cat"
+              :class="{active: filterCategory === cat}"
+              @click="filterCategory = cat"
+            >
+              {{ cat }}
+            </span>
+          </div>
         </div>
       </div>
 
-      <div v-if="loading" class="loading-state">加载中...</div>
+      <div v-if="loading" class="loading-state">
+        <div class="spinner"></div> 加载中...
+      </div>
+      
+      <div v-else-if="filteredProjects.length === 0" class="empty-state">
+        <p>🔍 没有找到匹配的作品</p>
+        <button class="btn-text" @click="clearFilters">清除所有筛选</button>
+      </div>
       
       <div v-else class="project-grid" ref="gridRef">
         <div 
@@ -45,13 +98,19 @@
           <div class="cover-wrapper">
             <img :src="getCoverImage(p)" loading="lazy" />
             <div class="hover-overlay" v-if="!isSelectionMode">
-              <span>点击进入</span>
+              <span>进入</span>
+            </div>
+            <div class="time-badge" v-if="p.updated_at">
+              {{ formatTime(p.updated_at) }}
             </div>
           </div>
           
           <div class="card-info">
-            <h3 class="project-name">{{ p.name }}</h3>
-            <span class="category-tag">{{ p.category }}</span>
+            <h3 class="project-name" v-html="highlightName(p.name)"></h3>
+            <div class="meta-row">
+              <span class="category-tag">{{ p.category }}</span>
+              <span class="scene-count">{{ p.scenes.length }} 场景</span>
+            </div>
           </div>
         </div>
       </div>
@@ -70,7 +129,7 @@
           <div class="menu-item danger" @click="handleMenuAction('delete')">🗑️ 删除此作品</div>
         </template>
         <template v-else>
-          <div class="menu-item" @click="selectAll">✅ 全选 ({{ filteredProjects.length }})</div>
+          <div class="menu-item" @click="selectAll">✅ 全选本页</div>
           <div v-if="selectedIds.length > 0" class="menu-item danger" @click="confirmBatchDelete">🗑️ 删除选中 ({{ selectedIds.length }})</div>
           <div class="divider"></div>
           <div class="menu-item" @click="fetchProjects">🔄 刷新列表</div>
@@ -122,7 +181,11 @@ const emit = defineEmits(['select-project', 'go-upload', 'enter-editor']);
 const gridRef = ref(null);
 const projects = ref([]);
 const loading = ref(true);
+
+// 筛选与排序状态
 const filterCategory = ref("");
+const searchQuery = ref("");
+const sortBy = ref("created_desc"); // 默认按创建时间倒序
 
 const isSelectionMode = ref(false); 
 const selectedIds = ref([]); 
@@ -137,14 +200,45 @@ let isDragging = false;
 
 const allCategories = ['家装', '商业空间', '样板房', '公共空间', '室外建筑', '展览展厅', '别墅', '园林景观', '酒店/民宿', '实景拍摄', '餐饮', '景区/风光', '其他'];
 
+// 计算可用分类
 const availableCategories = computed(() => {
   const cats = new Set(projects.value.map(p => p.category));
   return Array.from(cats);
 });
 
+// [核心] 过滤与排序逻辑
 const filteredProjects = computed(() => {
-  if (!filterCategory.value) return projects.value;
-  return projects.value.filter(p => p.category === filterCategory.value);
+  let result = projects.value;
+
+  // 1. 分类过滤
+  if (filterCategory.value) {
+    result = result.filter(p => p.category === filterCategory.value);
+  }
+
+  // 2. 搜索过滤 (忽略大小写)
+  if (searchQuery.value) {
+    const q = searchQuery.value.toLowerCase();
+    result = result.filter(p => p.name.toLowerCase().includes(q));
+  }
+
+  // 3. 排序逻辑
+  // 创建副本以防修改原数组顺序导致抖动
+  return [...result].sort((a, b) => {
+    switch (sortBy.value) {
+      case 'created_desc': 
+        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+      case 'created_asc': 
+        return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+      case 'updated_desc': 
+        return new Date(b.updated_at || 0) - new Date(a.updated_at || 0);
+      case 'name_asc': 
+        return a.name.localeCompare(b.name, 'zh-CN');
+      case 'category':
+        return a.category.localeCompare(b.category, 'zh-CN');
+      default:
+        return 0;
+    }
+  });
 });
 
 const fetchProjects = async () => {
@@ -158,152 +252,149 @@ const fetchProjects = async () => {
   }
 };
 
-// [核心修复] 优先读取 cover_url
 const getCoverImage = (project) => {
   if (project.scenes && project.scenes.length > 0) {
     const firstScene = project.scenes[0];
-    
-    // 1. 如果有专门的截图封面，优先使用
-    if (firstScene.cover_url) {
-      // 加上时间戳防止缓存
-      return `http://127.0.0.1:8000${firstScene.cover_url}?t=${new Date().getTime()}`;
-    }
-    
-    // 2. 否则使用原始全景图
+    if (firstScene.cover_url) return `http://127.0.0.1:8000${firstScene.cover_url}?t=${new Date(project.updated_at).getTime()}`; // 使用 updated_at 作为缓存刷新依据更智能
     return `http://127.0.0.1:8000${firstScene.image_url}`;
   }
   return 'https://via.placeholder.com/300x200?text=No+Scene';
 };
 
-const onCardClick = (project, event) => {
-  if (contextMenu.visible) { contextMenu.visible = false; return; }
-  if (isSelectionMode.value) toggleSelection(project.id);
-  else emit('select-project', project.id);
+// 搜索高亮辅助函数
+const highlightName = (name) => {
+  if (!searchQuery.value) return name;
+  const reg = new RegExp(`(${searchQuery.value})`, 'gi');
+  return name.replace(reg, '<span style="color:#3498db;font-weight:bold">$1</span>');
 };
 
-const toggleSelection = (id) => {
-  const index = selectedIds.value.indexOf(id);
-  if (index === -1) selectedIds.value.push(id);
-  else selectedIds.value.splice(index, 1);
+// 时间格式化
+const formatTime = (isoString) => {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  return `${date.getMonth()+1}-${date.getDate()} ${date.getHours()}:${date.getMinutes().toString().padStart(2,'0')}`;
 };
 
+const clearFilters = () => {
+  searchQuery.value = '';
+  filterCategory.value = '';
+};
+
+// ... (以下交互逻辑保持不变) ...
+const onCardClick = (project, event) => { if (contextMenu.visible) { contextMenu.visible = false; return; } if (isSelectionMode.value) toggleSelection(project.id); else emit('select-project', project.id); };
+const toggleSelection = (id) => { const index = selectedIds.value.indexOf(id); if (index === -1) selectedIds.value.push(id); else selectedIds.value.splice(index, 1); };
 const enterSelectionMode = () => { isSelectionMode.value = true; contextMenu.visible = false; };
 const exitSelectionMode = () => { isSelectionMode.value = false; selectedIds.value = []; contextMenu.visible = false; };
 const selectAll = () => { selectedIds.value = filteredProjects.value.map(p => p.id); isSelectionMode.value = true; contextMenu.visible = false; };
-
 const onBgContextMenu = (e) => showMenu(e, null);
-const onCardContextMenu = (e, project) => {
-  if (!selectedIds.value.includes(project.id)) {
-     if (!isSelectionMode.value) selectedIds.value = [];
-     if (!selectedIds.value.includes(project.id)) selectedIds.value.push(project.id);
-  }
-  showMenu(e, project);
-};
-
+const onCardContextMenu = (e, project) => { if (!selectedIds.value.includes(project.id)) { if (!isSelectionMode.value) selectedIds.value = []; if (!selectedIds.value.includes(project.id)) selectedIds.value.push(project.id); } showMenu(e, project); };
 const showMenu = (e, target) => { contextMenu.visible = true; contextMenu.x = e.clientX; contextMenu.y = e.clientY; contextMenu.targetId = target ? target.id : null; contextMenu.targetProject = target; };
 const closeMenu = () => { contextMenu.visible = false; };
-
-const handleMenuAction = (action) => {
-  const project = contextMenu.targetProject;
-  contextMenu.visible = false;
-  switch (action) {
-    case 'enter': emit('select-project', project.id); break;
-    case 'edit': emit('enter-editor', project.id); break;
-    case 'delete': confirmBatchDelete(); break;
-    case 'rename': openRenameModal(project); break;
-  }
-};
-
-const onMouseDown = (e) => {
-  if (e.button !== 0) return; 
-  closeMenu();
-  if (e.target.closest('.project-card')) return;
-  isDragging = true; dragBox.startX = e.clientX; dragBox.startY = e.clientY; dragBox.visible = true; dragBox.width = 0; dragBox.height = 0;
-  if (!e.ctrlKey && !e.metaKey && !isSelectionMode.value) selectedIds.value = [];
-  window.addEventListener('mousemove', onMouseMove); window.addEventListener('mouseup', onMouseUp);
-};
-
-const onMouseMove = (e) => {
-  if (!isDragging) return;
-  const cx = e.clientX; const cy = e.clientY;
-  dragBox.left = Math.min(dragBox.startX, cx); dragBox.top = Math.min(dragBox.startY, cy);
-  dragBox.width = Math.abs(cx - dragBox.startX); dragBox.height = Math.abs(cy - dragBox.startY);
-  if (dragBox.width < 5 && dragBox.height < 5) return;
-  checkSelectionIntersection();
-};
-
-const checkSelectionIntersection = () => {
-  if (!gridRef.value) return;
-  const cards = gridRef.value.querySelectorAll('.project-card');
-  const sRect = { left: dragBox.left, top: dragBox.top, right: dragBox.left + dragBox.width, bottom: dragBox.top + dragBox.height };
-  cards.forEach(card => {
-    const rect = card.getBoundingClientRect();
-    const intersect = !(rect.right < sRect.left || rect.left > sRect.right || rect.bottom < sRect.top || rect.top > sRect.bottom);
-    const id = parseInt(card.getAttribute('data-id'));
-    if (intersect) { if (!selectedIds.value.includes(id)) selectedIds.value.push(id); }
-  });
-};
-
+const handleMenuAction = (action) => { const project = contextMenu.targetProject; contextMenu.visible = false; switch (action) { case 'enter': emit('select-project', project.id); break; case 'edit': emit('enter-editor', project.id); break; case 'delete': confirmBatchDelete(); break; case 'rename': openRenameModal(project); break; } };
+const onMouseDown = (e) => { if (e.button !== 0) return; closeMenu(); if (e.target.closest('.project-card')) return; isDragging = true; dragBox.startX = e.clientX; dragBox.startY = e.clientY; dragBox.visible = true; dragBox.width = 0; dragBox.height = 0; if (!e.ctrlKey && !e.metaKey && !isSelectionMode.value) selectedIds.value = []; window.addEventListener('mousemove', onMouseMove); window.addEventListener('mouseup', onMouseUp); };
+const onMouseMove = (e) => { if (!isDragging) return; const cx = e.clientX; const cy = e.clientY; dragBox.left = Math.min(dragBox.startX, cx); dragBox.top = Math.min(dragBox.startY, cy); dragBox.width = Math.abs(cx - dragBox.startX); dragBox.height = Math.abs(cy - dragBox.startY); if (dragBox.width < 5 && dragBox.height < 5) return; checkSelectionIntersection(); };
+const checkSelectionIntersection = () => { if (!gridRef.value) return; const cards = gridRef.value.querySelectorAll('.project-card'); const sRect = { left: dragBox.left, top: dragBox.top, right: dragBox.left + dragBox.width, bottom: dragBox.top + dragBox.height }; cards.forEach(card => { const rect = card.getBoundingClientRect(); const intersect = !(rect.right < sRect.left || rect.left > sRect.right || rect.bottom < sRect.top || rect.top > sRect.bottom); const id = parseInt(card.getAttribute('data-id')); if (intersect) { if (!selectedIds.value.includes(id)) selectedIds.value.push(id); } }); };
 const onMouseUp = () => { isDragging = false; dragBox.visible = false; window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
-
 const confirmBatchDelete = () => { if (selectedIds.value.length === 0) return; contextMenu.visible = false; modals.delete.ids = [...selectedIds.value]; modals.delete.visible = true; };
-const executeDelete = async () => {
-  try {
-    const res = await fetch('http://127.0.0.1:8000/projects/batch_delete/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modals.delete.ids) });
-    if (res.ok) { projects.value = projects.value.filter(p => !modals.delete.ids.includes(p.id)); selectedIds.value = []; modals.delete.visible = false; if (projects.value.length === 0) exitSelectionMode(); }
-  } catch (err) { alert("删除失败"); }
-};
-
+const executeDelete = async () => { try { const res = await fetch('http://127.0.0.1:8000/projects/batch_delete/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modals.delete.ids) }); if (res.ok) { projects.value = projects.value.filter(p => !modals.delete.ids.includes(p.id)); selectedIds.value = []; modals.delete.visible = false; if (projects.value.length === 0) exitSelectionMode(); } } catch (err) { alert("删除失败"); } };
 const openRenameModal = (project) => { modals.rename.project = project; modals.rename.tempName = project.name; modals.rename.tempCategory = project.category; modals.rename.visible = true; };
-const executeRename = async () => {
-  const p = modals.rename.project;
-  try {
-    const res = await fetch(`http://127.0.0.1:8000/projects/${p.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modals.rename.tempName, category: modals.rename.tempCategory }) });
-    if (res.ok) { p.name = modals.rename.tempName; p.category = modals.rename.tempCategory; modals.rename.visible = false; }
-  } catch (err) { alert("修改失败"); }
-};
-
+const executeRename = async () => { const p = modals.rename.project; try { const res = await fetch(`http://127.0.0.1:8000/projects/${p.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modals.rename.tempName, category: modals.rename.tempCategory }) }); if (res.ok) { p.name = modals.rename.tempName; p.category = modals.rename.tempCategory; modals.rename.visible = false; } } catch (err) { alert("修改失败"); } };
 onMounted(() => { fetchProjects(); window.addEventListener('click', closeMenu); });
 onBeforeUnmount(() => { window.removeEventListener('click', closeMenu); });
 </script>
 
 <style scoped>
-/* 保持原有样式不变，完全复用 */
 .list-wrapper { min-height: 100vh; background-color: #f5f7fa; padding: 20px; font-family: 'PingFang SC', sans-serif; user-select: none; position: relative; }
 .content-container { max-width: 1400px; margin: 0 auto; }
-.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; height: 50px; }
-.left-tools { display: flex; align-items: center; gap: 30px; }
-.left-tools h2 { margin: 0; font-size: 24px; color: #333; }
-.category-tabs { display: flex; gap: 10px; }
-.category-tabs span { font-size: 14px; color: #666; cursor: pointer; padding: 4px 12px; border-radius: 20px; transition: all 0.2s; }
-.category-tabs span:hover { background: #e6e6e6; }
-.category-tabs span.active { background: #333; color: white; font-weight: bold; }
-.right-tools { display: flex; align-items: center; gap: 10px; }
-.selection-tools { display: flex; align-items: center; gap: 10px; margin-right: 10px; }
-.selected-count { font-size: 14px; color: #666; font-weight: bold; }
-.btn { border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s; font-weight: 500; }
+
+/* Toolbar 升级 */
+.toolbar-container {
+  background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  margin-bottom: 24px; padding: 16px 24px;
+}
+.toolbar-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.title-group { display: flex; align-items: center; gap: 10px; }
+.title-group h2 { margin: 0; font-size: 20px; color: #2c3e50; }
+.count-badge { background: #f0f2f5; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+
+.actions-group { display: flex; align-items: center; gap: 16px; }
+
+/* 搜索框 */
+.search-box {
+  position: relative; display: flex; align-items: center;
+  background: #f8f9fa; border: 1px solid #e1e4e8; border-radius: 6px; padding: 0 10px;
+  width: 240px; transition: border-color 0.2s;
+}
+.search-box:focus-within { border-color: #3498db; background: white; }
+.search-icon { color: #999; }
+.search-input {
+  border: none; background: transparent; padding: 8px 5px; font-size: 14px; width: 100%; outline: none;
+}
+.clear-btn { background: none; border: none; font-size: 18px; color: #999; cursor: pointer; padding: 0; line-height: 1; }
+.clear-btn:hover { color: #666; }
+
+/* 排序框 */
+.sort-box { display: flex; align-items: center; gap: 8px; font-size: 14px; color: #666; }
+.sort-select { padding: 6px 10px; border: 1px solid #e1e4e8; border-radius: 4px; outline: none; background: white; font-size: 13px; cursor: pointer; }
+.sort-select:hover { border-color: #bbb; }
+
+.toolbar-bottom { border-top: 1px solid #eee; padding-top: 12px; }
+.category-tabs { display: flex; gap: 15px; flex-wrap: wrap; }
+.category-tabs span {
+  font-size: 14px; color: #666; cursor: pointer; padding: 4px 12px;
+  border-radius: 4px; transition: all 0.2s;
+}
+.category-tabs span:hover { background: #f0f2f5; color: #333; }
+.category-tabs span.active { background: #eef6fc; color: #3498db; font-weight: 600; }
+
+/* Buttons */
+.btn { border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; transition: all 0.2s; font-weight: 500; }
 .btn-primary { background: #333; color: white; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
 .btn-primary:hover { background: #000; transform: translateY(-1px); }
 .btn-danger { background: #fee; color: #e74c3c; }
 .btn-danger:hover { background: #fdd; }
-.btn-text { background: transparent; color: #666; }
+.btn.small { padding: 6px 12px; font-size: 13px; }
+.btn-text { background: transparent; color: #666; padding: 5px 10px; }
 .btn-text:hover { color: #333; background: #eee; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 列表 */
 .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 24px; padding-bottom: 100px; }
-.project-card { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.03); position: relative; transition: all 0.2s; cursor: pointer; border: 2px solid transparent; }
+.project-card {
+  background: white; border-radius: 12px; overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.03); position: relative;
+  transition: all 0.2s; cursor: pointer; border: 2px solid transparent;
+}
 .project-card:hover { transform: translateY(-4px); box-shadow: 0 10px 20px rgba(0,0,0,0.08); }
 .project-card.selected { border-color: #3498db; background: #f0f9ff; }
+
 .checkbox-indicator { position: absolute; top: 12px; left: 12px; z-index: 10; width: 24px; height: 24px; border-radius: 50%; background: white; border: 2px solid #ddd; display: flex; justify-content: center; align-items: center; }
 .project-card.selected .checkbox-indicator { background: #3498db; border-color: #3498db; }
 .project-card.selected .checkbox-indicator .check-circle { width: 10px; height: 10px; background: white; border-radius: 50%; }
-.cover-wrapper { height: 160px; background: #eee; position: relative; }
-.cover-wrapper img { width: 100%; height: 100%; object-fit: cover; }
+
+.cover-wrapper { height: 160px; background: #f5f5f5; position: relative; overflow: hidden; }
+.cover-wrapper img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s; }
+.project-card:hover img { transform: scale(1.05); }
 .hover-overlay { position: absolute; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.2); display: flex; justify-content: center; align-items: center; opacity: 0; transition: opacity 0.2s; }
 .project-card:hover .hover-overlay { opacity: 1; }
-.hover-overlay span { color: white; border: 1px solid rgba(255,255,255,0.8); padding: 6px 16px; border-radius: 20px; font-size: 13px; backdrop-filter: blur(4px); }
-.card-info { padding: 16px; }
-.project-name { margin: 0 0 6px; font-size: 15px; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.category-tag { font-size: 12px; color: #888; background: #f5f5f5; padding: 2px 8px; border-radius: 4px; }
+.hover-overlay span { color: white; border: 1px solid rgba(255,255,255,0.8); padding: 4px 12px; border-radius: 20px; font-size: 12px; backdrop-filter: blur(4px); }
+
+.time-badge {
+  position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6);
+  color: rgba(255,255,255,0.9); font-size: 10px; padding: 2px 6px; border-radius: 4px;
+}
+
+.card-info { padding: 14px; }
+.project-name { margin: 0 0 8px; font-size: 15px; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.4; }
+.meta-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #999; }
+.category-tag { background: #f0f2f5; padding: 2px 8px; border-radius: 4px; color: #666; }
+
+/* 其他通用样式保持一致 */
+.loading-state { text-align: center; padding: 40px; color: #999; display: flex; flex-direction: column; align-items: center; }
+.spinner { width: 30px; height: 30px; border: 3px solid #eee; border-top-color: #3498db; border-radius: 50%; animation: spin 1s infinite linear; margin-bottom: 10px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.empty-state { text-align: center; padding: 60px; color: #999; }
+
+/* 框选、菜单、弹窗样式同前... */
 .drag-selection-box { position: fixed; border: 1px solid #3498db; background-color: rgba(52, 152, 219, 0.2); z-index: 9999; pointer-events: none; }
 .context-menu { position: fixed; z-index: 10000; background: white; border-radius: 8px; box-shadow: 0 5px 20px rgba(0,0,0,0.15); padding: 6px 0; min-width: 160px; border: 1px solid #eee; }
 .menu-item { padding: 10px 20px; font-size: 14px; color: #333; cursor: pointer; display: flex; align-items: center; gap: 8px; }

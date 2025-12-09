@@ -1,23 +1,20 @@
 from pydantic import BaseModel
 from typing import List, Optional
+from datetime import datetime
 
-# Hotspot 保持不变...
+# Hotspot & Scene 保持不变...
 class HotspotBase(BaseModel):
     text: str
     x: float
     y: float
     z: float
     target_scene_id: int
-
 class HotspotCreate(HotspotBase):
     source_scene_id: int
-
 class Hotspot(HotspotBase):
     id: int
-    class Config:
-        from_attributes = True
+    class Config: from_attributes = True
 
-# [修改] Scene 完整参数
 class Scene(BaseModel):
     id: int
     name: str
@@ -25,25 +22,18 @@ class Scene(BaseModel):
     cover_url: Optional[str] = None
     project_id: int
     hotspots: List[Hotspot] = []
-    
     initial_heading: float
     initial_pitch: float
-    
     fov_min: float
     fov_max: float
     fov_default: float
-    
     limit_h_min: float
     limit_h_max: float
     limit_v_min: float
     limit_v_max: float
+    class Config: from_attributes = True
 
-    class Config:
-        from_attributes = True
-
-# [修改] 更新模型
 class SceneUpdate(BaseModel):
-    # 允许更新所有参数
     initial_heading: Optional[float] = None
     initial_pitch: Optional[float] = None
     fov_min: Optional[float] = None
@@ -53,9 +43,9 @@ class SceneUpdate(BaseModel):
     limit_h_max: Optional[float] = None
     limit_v_min: Optional[float] = None
     limit_v_max: Optional[float] = None
-    cover_url: Optional[str] = None # 用于更新截图封面
+    cover_url: Optional[str] = None
 
-# Project 保持不变...
+# Project 相关修改
 class ProjectBase(BaseModel):
     name: str
     category: str
@@ -67,6 +57,11 @@ class Project(ProjectBase):
     id: int
     cover_url: Optional[str] = None
     scenes: List[Scene] = []
+    
+    # [新增]
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
     class Config:
         from_attributes = True
 
