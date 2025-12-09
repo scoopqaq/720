@@ -17,29 +17,43 @@ class Hotspot(HotspotBase):
     class Config:
         from_attributes = True
 
-# [修改] Scene 增加视角字段
+# [修改] Scene 完整参数
 class Scene(BaseModel):
     id: int
     name: str
     image_url: str
+    cover_url: Optional[str] = None
     project_id: int
     hotspots: List[Hotspot] = []
     
-    # 新增字段
-    initial_angle: float
-    initial_fov: float
-    min_polar_angle: float
-    max_polar_angle: float
+    initial_heading: float
+    initial_pitch: float
+    
+    fov_min: float
+    fov_max: float
+    fov_default: float
+    
+    limit_h_min: float
+    limit_h_max: float
+    limit_v_min: float
+    limit_v_max: float
 
     class Config:
         from_attributes = True
 
-# [新增] 用于更新 Scene 的模型
+# [修改] 更新模型
 class SceneUpdate(BaseModel):
-    initial_angle: Optional[float] = None
-    initial_fov: Optional[float] = None
-    min_polar_angle: Optional[float] = None
-    max_polar_angle: Optional[float] = None
+    # 允许更新所有参数
+    initial_heading: Optional[float] = None
+    initial_pitch: Optional[float] = None
+    fov_min: Optional[float] = None
+    fov_max: Optional[float] = None
+    fov_default: Optional[float] = None
+    limit_h_min: Optional[float] = None
+    limit_h_max: Optional[float] = None
+    limit_v_min: Optional[float] = None
+    limit_v_max: Optional[float] = None
+    cover_url: Optional[str] = None # 用于更新截图封面
 
 # Project 保持不变...
 class ProjectBase(BaseModel):
@@ -51,11 +65,12 @@ class ProjectCreate(ProjectBase):
 
 class Project(ProjectBase):
     id: int
+    cover_url: Optional[str] = None
     scenes: List[Scene] = []
     class Config:
         from_attributes = True
 
-# [新增] 用于更新 Project 的模型
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     category: Optional[str] = None
+    cover_url: Optional[str] = None

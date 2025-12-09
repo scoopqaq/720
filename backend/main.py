@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 from database import engine, Base, get_db
 import models, schemas
 
+import base64
+import time
+from pydantic import BaseModel
 # 1. 自动创建数据库表
 Base.metadata.create_all(bind=engine)
 
@@ -144,3 +147,22 @@ def update_scene(scene_id: int, scene_update: schemas.SceneUpdate, db: Session =
         
     db.commit()
     return db_scene
+# [新增] 上传 Base64 图片 (用于保存截图封面)
+class ImageBase64(BaseModel):
+    image_data: str # "data:image/png;base64,....."
+
+@app.post("/upload_base64/")
+def upload_base64(data: ImageBase64):
+    # 1. 解析 Base64
+    header, encoded = data.image_data.split(",", 1)
+    file_ext = header.split(";")[0].split("/")[1] # png or jpeg
+    image_bytes = base64.b64decode(encoded)
+    
+    # 2. 保存文件
+    filename = f"cover_{int(time.time())}.{file_ext}"
+    file_path = f"static/uploads/{filename}"
+    
+    with open(file_path, "wb") as f:
+        f.write(image_bytes)
+        
+    return {"url": f"/{file_path}"}

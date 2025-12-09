@@ -1,318 +1,391 @@
 <template>
-    <div class="editor-layout">
-      <div class="viewport">
-        <div ref="containerRef" class="three-container"></div>
-        
-        <div class="scene-header" v-if="currentScene">
-          <button class="back-btn" @click="$emit('back')">← 返回列表</button>
-          <span class="scene-title">{{ currentScene.name }}</span>
-          <select v-if="scenes.length > 1" :value="currentScene.id" @change="switchScene($event.target.value)" class="scene-select">
-            <option v-for="s in scenes" :key="s.id" :value="s.id">{{ s.name }}</option>
-          </select>
+  <div class="editor-layout">
+    <div class="viewport">
+      <div 
+        ref="containerRef" 
+        class="three-container"
+        @contextmenu.prevent="onContextMenu"
+      ></div>
+      
+      <div class="viewport-header">
+        <button class="back-btn" @click="$emit('back')">← 返回列表</button>
+        <div class="scene-info" v-if="currentScene">
+          <span class="scene-name">{{ currentScene.name }}</span>
         </div>
+        <button class="save-primary-btn" @click="saveAll" :disabled="saving">
+          {{ saving ? '保存中...' : '💾 保存所有设置' }}
+        </button>
       </div>
-  
-      <div class="sidebar">
-        <div class="panel-header">全景设置</div>
-        
-        <div class="panel-content" v-if="currentScene">
-          <div class="control-group">
-            <label>初始视角 (Initial View)</label>
-            <div class="desc">设置用户进入时的默认朝向</div>
-            <button class="action-btn" @click="setAsInitialView">Set Current as Initial</button>
-            <div class="value-display">Current Y: {{ (cameraRotationY * 180 / Math.PI).toFixed(0) }}°</div>
+      
+      <div class="center-cross">+</div>
+
+      <transition name="fade">
+        <div 
+          v-if="menuVisible" 
+          class="context-menu" 
+          :style="{ left: menuPos.x + 'px', top: menuPos.y + 'px' }"
+        >
+          <div class="item" @click="toggleDirection">
+            ⇄ 拖拽方向: {{ isReverse ? '反向 (画面跟随)' : '正向 (相机跟随)' }}
           </div>
-  
-          <hr>
-  
-          <div class="control-group">
-            <label>视场角 (FOV)</label>
-            <div class="desc">控制画面的缩放程度 ({{ settings.fov.toFixed(0) }})</div>
-            <input 
-              type="range" min="30" max="120" 
-              v-model.number="settings.fov" 
-              @input="updateCameraFOV"
-            >
-            <div class="row">
-              <button class="sm-btn" @click="settings.fov=75; updateCameraFOV()">重置(75)</button>
+          <div class="item" @click="resetView">↺ 视角复位</div>
+        </div>
+      </transition>
+    </div>
+
+    <div class="sidebar">
+       <div class="panel-header">全景参数配置</div>
+       <div class="panel-body" v-if="currentScene">
+          <div class="section-block">
+            <h3>1. 初始状态与封面</h3>
+            <p class="desc">在左侧调整好角度和缩放，点击下方按钮记录。</p>
+            <div class="action-grid">
+              <button class="action-btn primary" @click="captureInitialState">📍 设为初始视角 & FOV</button>
+              <button class="action-btn" @click="captureCover">🖼️ 截取当前画面为封面</button>
+            </div>
+            <div class="data-display">
+              <div class="tag">水平: {{ Math.round(settings.initial_heading) }}°</div>
+              <div class="tag">垂直: {{ Math.round(settings.initial_pitch) }}°</div>
+              <div class="tag">FOV: {{ Math.round(settings.fov_default) }}</div>
             </div>
           </div>
-  
-          <hr>
-  
-          <div class="control-group">
-            <label>垂直视角限制 (Vertical Limits)</label>
-            <div class="desc">防止用户看到极顶或极底的脚架</div>
-            
-            <div class="sub-label">顶部限制 (0-90°): {{ (settings.minPolar * 180 / Math.PI).toFixed(0) }}°</div>
-            <input 
-              type="range" min="0" max="1.57" step="0.1"
-              v-model.number="settings.minPolar"
-              @input="updateControls"
-            >
-  
-            <div class="sub-label">底部限制 (90-180°): {{ (settings.maxPolar * 180 / Math.PI).toFixed(0) }}°</div>
-            <input 
-              type="range" min="1.57" max="3.14" step="0.1"
-              v-model.number="settings.maxPolar"
-              @input="updateControls"
-            >
+          <hr class="divider">
+          <div class="section-block">
+            <h3>2. 缩放范围 (FOV)</h3>
+            <div class="control-row">
+              <label>范围 ({{ settings.fov_min }} - {{ settings.fov_max }})</label>
+              <DualSlider :min="10" :max="150" v-model="fovRange" @change="onFovRangeChange" />
+            </div>
+            <div class="control-row">
+              <label>默认值 ({{ Math.round(settings.fov_default) }})</label>
+              <input type="range" :min="settings.fov_min" :max="settings.fov_max" v-model.number="settings.fov_default" @input="updateCameraFOV">
+            </div>
           </div>
-  
-          <div class="panel-footer">
-            <button class="save-btn" @click="saveSettings">保存当前设置</button>
+          <hr class="divider">
+          <div class="section-block">
+            <h3>3. 视角旋转限制</h3>
+            <div class="control-row">
+              <label>水平限制 ({{ settings.limit_h_min }}° ~ {{ settings.limit_h_max }}°)</label>
+              <DualSlider :min="-180" :max="180" v-model="hLimitRange" @change="onHLimitChange" />
+            </div>
+            <div class="control-row">
+              <label>垂直限制 ({{ settings.limit_v_min }}° ~ {{ settings.limit_v_max }}°)</label>
+              <DualSlider :min="-90" :max="90" v-model="vLimitRange" @change="onVLimitChange" />
+              <p class="sub-desc">90°=天顶，-90°=脚底</p>
+            </div>
           </div>
-        </div>
-        <div v-else class="loading-text">加载场景中...</div>
-      </div>
+       </div>
     </div>
-  </template>
-  
-  <script setup>
-  import { ref, onMounted, onBeforeUnmount, reactive } from 'vue';
-  import * as THREE from 'three';
-  import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-  
-  const props = defineProps(['projectId']);
-  const emit = defineEmits(['back']);
-  
-  // --- 数据 ---
-  const scenes = ref([]);
-  const currentScene = ref(null);
-  const containerRef = ref(null);
-  
-  // 编辑器设置状态 (对应右侧面板)
-  const settings = reactive({
-    initialAngle: 0,
-    fov: 75,
-    minPolar: 0,    // 0 = 顶
-    maxPolar: 3.14, // PI = 底
-  });
-  
-  // 实时监控相机状态
-  const cameraRotationY = ref(0);
-  
-  // Three.js 对象
-  let scene, camera, renderer, controls, sphereMesh, textureLoader;
-  let animationId;
-  
-  // --- 初始化与加载 ---
-  const fetchProject = async () => {
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import DualSlider from './DualSlider.vue';
+
+const props = defineProps(['projectId']);
+const emit = defineEmits(['back']);
+
+const scenes = ref([]);
+const currentScene = ref(null);
+const containerRef = ref(null);
+const saving = ref(false);
+
+const settings = reactive({
+  initial_heading: 0,
+  initial_pitch: 0,
+  fov_min: 70,
+  fov_max: 120,
+  fov_default: 95,
+  limit_h_min: -180,
+  limit_h_max: 180,
+  limit_v_min: -90,
+  limit_v_max: 90,
+});
+
+const fovRange = computed({
+  get: () => [settings.fov_min, settings.fov_max],
+  set: (val) => { settings.fov_min = val[0]; settings.fov_max = val[1]; }
+});
+const hLimitRange = computed({
+  get: () => [settings.limit_h_min, settings.limit_h_max],
+  set: (val) => { settings.limit_h_min = val[0]; settings.limit_h_max = val[1]; }
+});
+const vLimitRange = computed({
+  get: () => [settings.limit_v_min, settings.limit_v_max],
+  set: (val) => { settings.limit_v_min = val[0]; settings.limit_v_max = val[1]; }
+});
+
+let scene, camera, renderer, controls, sphereMesh, textureLoader, animationId;
+
+// [新增] 菜单状态
+const menuVisible = ref(false);
+const menuPos = ref({ x: 0, y: 0 });
+const isReverse = ref(false); // 拖拽方向状态
+
+// --- 初始化与加载 (保持原有逻辑) ---
+const fetchProject = async () => {
+  try {
     const res = await fetch(`http://127.0.0.1:8000/projects/${props.projectId}`);
     const data = await res.json();
     scenes.value = data.scenes || [];
-    if (scenes.value.length > 0) {
-      loadScene(scenes.value[0].id); // 默认加载第一个
-    }
-  };
-  
-  const loadScene = (sceneId) => {
-    const target = scenes.value.find(s => s.id == sceneId);
-    if (!target) return;
-    currentScene.value = target;
-  
-    // 1. 同步后端数据到右侧面板
-    settings.initialAngle = target.initial_angle || 0;
-    settings.fov = target.initial_fov || 75;
-    settings.minPolar = target.min_polar_angle || 0;
-    settings.maxPolar = target.max_polar_angle || Math.PI;
-  
-    // 2. 如果 Three.js 还没初始化，初始化
-    if (!renderer) {
-      initThree();
-    }
-    
-    // 3. 更新画面贴图
-    textureLoader.load(`http://127.0.0.1:8000${target.image_url}?t=${Date.now()}`, (tex) => {
+    if (scenes.value.length > 0) loadScene(scenes.value[0].id);
+  } catch(e) { console.error(e); }
+};
+
+const loadScene = (sceneId) => {
+  const target = scenes.value.find(s => s.id == sceneId);
+  if (!target) return;
+  currentScene.value = target;
+
+  settings.initial_heading = target.initial_heading ?? 0;
+  settings.initial_pitch = target.initial_pitch ?? 0;
+  settings.fov_min = target.fov_min ?? 70;
+  settings.fov_max = target.fov_max ?? 120;
+  settings.fov_default = target.fov_default ?? 95;
+  settings.limit_h_min = target.limit_h_min ?? -180;
+  settings.limit_h_max = target.limit_h_max ?? 180;
+  settings.limit_v_min = target.limit_v_min ?? -90;
+  settings.limit_v_max = target.limit_v_max ?? 90;
+
+  if (!renderer) initThree();
+
+  textureLoader.load(
+    `http://127.0.0.1:8000${target.image_url}?t=${Date.now()}`,
+    (tex) => {
       tex.colorSpace = THREE.SRGBColorSpace;
       sphereMesh.material.map = tex;
       sphereMesh.material.needsUpdate = true;
-      
-      // 4. 应用设置到相机
-      applySettingsToCamera();
+      controls.reset(); 
+      applyAllSettingsToThree();
+    }
+  );
+};
+
+const initThree = () => {
+  const width = containerRef.value.clientWidth;
+  const height = containerRef.value.clientHeight;
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(settings.fov_default, width / height, 0.1, 1000);
+  camera.position.set(0, 0, 0.1);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setSize(width, height);
+  containerRef.value.appendChild(renderer.domElement);
+
+  const geo = new THREE.SphereGeometry(500, 60, 40);
+  geo.scale(-1, 1, 1);
+  sphereMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial());
+  scene.add(sphereMesh);
+
+  textureLoader = new THREE.TextureLoader();
+  textureLoader.setCrossOrigin('anonymous');
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+  controls.enableZoom = false; 
+  // [新增] 初始化方向
+  controls.rotateSpeed = isReverse.value ? -0.5 : 0.5;
+
+  containerRef.value.addEventListener('wheel', onMouseWheel, { passive: false });
+
+  animate();
+  window.addEventListener('resize', onResize);
+  // [新增] 关闭菜单监听
+  window.addEventListener('click', closeMenu);
+};
+
+const applyAllSettingsToThree = () => {
+  if (!controls) return;
+  camera.fov = settings.fov_default;
+  camera.updateProjectionMatrix();
+  const azimuth = settings.initial_heading * (Math.PI / 180);
+  const polar = (90 - settings.initial_pitch) * (Math.PI / 180);
+  const r = 0.1;
+  camera.position.x = r * Math.sin(polar) * Math.sin(azimuth);
+  camera.position.y = r * Math.cos(polar);
+  camera.position.z = r * Math.sin(polar) * Math.cos(azimuth);
+  controls.target.set(0,0,0);
+  controls.update();
+  updateControlsLimits();
+};
+
+const updateControlsLimits = () => {
+  if (!controls) return;
+  controls.minAzimuthAngle = settings.limit_h_min * (Math.PI / 180);
+  controls.maxAzimuthAngle = settings.limit_h_max * (Math.PI / 180);
+  controls.minPolarAngle = (90 - settings.limit_v_max) * (Math.PI / 180);
+  controls.maxPolarAngle = (90 - settings.limit_v_min) * (Math.PI / 180);
+  controls.update();
+};
+
+// [新增] 右键逻辑
+const onContextMenu = (e) => {
+  e.preventDefault(); // 屏蔽浏览器菜单
+  menuPos.value = { x: e.clientX, y: e.clientY };
+  menuVisible.value = true;
+};
+
+const closeMenu = () => {
+  menuVisible.value = false;
+};
+
+const toggleDirection = () => {
+  if (!controls) return;
+  isReverse.value = !isReverse.value;
+  const speed = 0.5;
+  controls.rotateSpeed = isReverse.value ? -speed : speed;
+};
+
+const resetView = () => {
+  // 恢复到当前保存的初始状态
+  applyAllSettingsToThree();
+};
+
+const captureInitialState = () => {
+  if (!controls) return;
+  const azimuth = controls.getAzimuthalAngle(); 
+  const polar = controls.getPolarAngle(); 
+  settings.initial_heading = azimuth * (180 / Math.PI);
+  settings.initial_pitch = 90 - (polar * (180 / Math.PI));
+  settings.fov_default = camera.fov;
+  const tempBtn = document.querySelector('.action-btn.primary');
+  if(tempBtn) {
+    const originalText = tempBtn.innerText;
+    tempBtn.innerText = "✅ 已记录";
+    setTimeout(() => tempBtn.innerText = originalText, 1000);
+  }
+};
+
+const captureCover = async () => {
+  renderer.render(scene, camera);
+  const dataUrl = renderer.domElement.toDataURL('image/jpeg', 0.7);
+  try {
+    const res = await fetch('http://127.0.0.1:8000/upload_base64/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_data: dataUrl })
     });
-  };
-  
-  const initThree = () => {
-    const width = containerRef.value.clientWidth;
-    const height = containerRef.value.clientHeight;
-    
-    scene = new THREE.Scene();
-    // 初始相机参数稍后会被 settings 覆盖
-    camera = new THREE.PerspectiveCamera(75, width/height, 0.1, 1000);
-    camera.position.set(0,0,0.1);
-  
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(width, height);
-    containerRef.value.appendChild(renderer.domElement);
-  
-    // 球体
-    const geo = new THREE.SphereGeometry(500, 60, 40);
-    geo.scale(-1, 1, 1);
-    sphereMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial());
-    scene.add(sphereMesh);
-  
-    textureLoader = new THREE.TextureLoader();
-    textureLoader.setCrossOrigin('anonymous');
-  
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.enableZoom = false; // 禁用自带缩放，改用我们自己的 FOV 逻辑
-  
-    animate();
-    window.addEventListener('resize', onResize);
-  };
-  
-  // --- 核心功能：应用设置 ---
-  const applySettingsToCamera = () => {
-    if (!camera || !controls || !sphereMesh) return;
-  
-    // 1. 设置 FOV
-    camera.fov = settings.fov;
-    camera.updateProjectionMatrix();
-  
-    // 2. 设置初始角度 (旋转球体实现)
-    // 注意：Three.js 默认看向 -Z。
-    sphereMesh.rotation.y = settings.initialAngle;
-    
-    // 3. 设置垂直限制
-    controls.minPolarAngle = settings.minPolar;
-    controls.maxPolarAngle = settings.maxPolar;
-    controls.update();
-  };
-  
-  // 响应面板操作
-  const updateCameraFOV = () => {
-    if(camera) {
-      camera.fov = settings.fov;
-      camera.updateProjectionMatrix();
-    }
-  };
-  
-  const updateControls = () => {
-    if(controls) {
-      controls.minPolarAngle = settings.minPolar;
-      controls.maxPolarAngle = settings.maxPolar;
-    }
-  };
-  
-  // "设为初始视角" 按钮逻辑
-  // 这里有一个 Hack：因为我们旋转的是球体(sphere.rotation.y)，而不是相机。
-  // 所以相机的朝向始终相对不变，我们通过旋转球体来改变"看似"的初始角度。
-  // 但 OrbitControls 旋转的是相机。
-  // 简化逻辑：用户转动相机 -> 获取相机当前的 rotation -> 反向应用给球体，并重置相机？
-  // 不，更简单的做法是：
-  // 初始视角 = 球体的 Y 轴旋转。
-  // 当用户点击 "Set Current" 时，我们计算当前相机看向的方位角，加到球体的旋转上。
-  // (这个逻辑比较复杂，为了简化，第一版我们只做：手动输入数值 或 简单的重置)
-  // 修正方案：
-  // 我们让用户拖拽画面，点击“保存”，此时我们记录 controls.getAzimuthalAngle()
-  // 但下次加载时，OrbitControls 没有方便的 setAzimuthalAngle 方法。
-  // 最简单的方案：我们保存 sphere.rotation.y。
-  // 这里的 "Set Current as Initial" 暂且实现为：重置相机到正前方。
-  const setAsInitialView = () => {
-      // 这是一个复杂的数学问题，暂简化为：将当前球体旋转角度存入 settings
-      // 实际商业项目中，通常是旋转相机，然后记录相机的 lookAt 向量。
-      // 为了不让代码过于复杂报错，这里先保留接口，提示用户手动保存。
-      alert("当前版本请通过保存按钮记录当前 FOV 和限制。初始视角功能正在开发高级算法。");
-  };
-  
-  
-  // 保存到后端
-  const saveSettings = async () => {
-    if(!currentScene.value) return;
-    
-    const payload = {
-      initial_angle: sphereMesh.rotation.y, // 存球体旋转
-      initial_fov: settings.fov,
-      min_polar_angle: settings.minPolar,
-      max_polar_angle: settings.maxPolar
-    };
-  
-    try {
-      const res = await fetch(`http://127.0.0.1:8000/scenes/${currentScene.value.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if(res.ok) {
-        alert("设置已保存！下次进入将应用此效果。");
-      }
-    } catch(e) {
-      alert("保存失败");
-    }
-  };
-  
-  
-  const animate = () => {
-    animationId = requestAnimationFrame(animate);
-    controls.update();
-    renderer.render(scene, camera);
-    
-    // 更新 UI 上的当前角度显示 (调试用)
-    if (sphereMesh) cameraRotationY.value = sphereMesh.rotation.y;
-  };
-  
-  const onResize = () => {
-    if (!containerRef.value) return;
-    camera.aspect = containerRef.value.clientWidth / containerRef.value.clientHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(containerRef.value.clientWidth, containerRef.value.clientHeight);
-  };
-  
-  const switchScene = (id) => {
-    loadScene(id);
-  };
-  
-  onBeforeUnmount(() => {
-    cancelAnimationFrame(animationId);
-    window.removeEventListener('resize', onResize);
-    if(renderer) renderer.dispose();
-  });
-  </script>
-  
-  <style scoped>
-  .editor-layout { display: flex; height: 100vh; width: 100vw; overflow: hidden; }
-  
-  .viewport { flex: 1; position: relative; background: #000; }
-  .three-container { width: 100%; height: 100%; }
-  
-  .scene-header {
-    position: absolute; top: 0; left: 0; width: 100%; height: 50px;
-    background: rgba(0,0,0,0.5); display: flex; align-items: center; padding: 0 20px;
-    color: white; z-index: 10;
-  }
-  .back-btn { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: white; padding: 5px 10px; cursor: pointer; margin-right: 20px; }
-  .scene-select { margin-left: auto; background: #333; color: white; border: none; padding: 5px; }
-  
-  /* 右侧侧边栏 */
-  .sidebar {
-    width: 320px; background: #2c3e50; color: #ecf0f1;
-    display: flex; flex-direction: column; border-left: 1px solid #34495e;
-  }
-  .panel-header {
-    height: 50px; line-height: 50px; padding: 0 20px; font-weight: bold; font-size: 16px;
-    background: #34495e; border-bottom: 1px solid #2c3e50;
-  }
-  .panel-content { padding: 20px; flex: 1; overflow-y: auto; }
-  
-  .control-group { margin-bottom: 20px; }
-  .control-group label { display: block; font-weight: bold; margin-bottom: 5px; color: #3498db; }
-  .desc { font-size: 12px; color: #95a5a6; margin-bottom: 10px; }
-  .sub-label { font-size: 12px; margin-top: 10px; display: block; }
-  
-  input[type=range] { width: 100%; cursor: pointer; }
-  
-  .value-display { font-size: 12px; color: #f1c40f; margin-top: 5px; text-align: right; }
-  
-  hr { border: 0; border-top: 1px solid #34495e; margin: 20px 0; }
-  
-  .panel-footer { margin-top: 20px; text-align: center; }
-  .save-btn {
-    width: 100%; padding: 12px; background: #27ae60; color: white; border: none;
-    font-size: 16px; font-weight: bold; cursor: pointer; border-radius: 4px;
-  }
-  .save-btn:hover { background: #2ecc71; }
-  
-  .sm-btn { font-size: 12px; padding: 4px 8px; cursor: pointer; }
-  </style>
+    const data = await res.json();
+    await fetch(`http://127.0.0.1:8000/scenes/${currentScene.value.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cover_url: data.url })
+    });
+    alert("封面已更新！");
+  } catch(e) { alert("上传失败"); }
+};
+
+const saveAll = async () => {
+  saving.value = true;
+  try {
+    const payload = { ...settings };
+    payload.fov_default = camera.fov;
+    const res = await fetch(`http://127.0.0.1:8000/scenes/${currentScene.value.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) alert("设置已保存！");
+    else throw new Error("API Error");
+  } catch(e) { alert("保存失败"); } 
+  finally { saving.value = false; }
+};
+
+const onFovRangeChange = () => {
+  if (settings.fov_default < settings.fov_min) settings.fov_default = settings.fov_min;
+  if (settings.fov_default > settings.fov_max) settings.fov_default = settings.fov_max;
+  updateCameraFOV();
+};
+const updateCameraFOV = () => {
+  if (camera) { camera.fov = settings.fov_default; camera.updateProjectionMatrix(); }
+};
+const onHLimitChange = () => { updateControlsLimits(); };
+const onVLimitChange = () => { updateControlsLimits(); };
+
+const onMouseWheel = (e) => {
+  e.preventDefault();
+  let newFov = camera.fov + e.deltaY * 0.05;
+  newFov = Math.max(settings.fov_min, Math.min(settings.fov_max, newFov));
+  camera.fov = newFov;
+  camera.updateProjectionMatrix();
+};
+
+const animate = () => {
+  animationId = requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+};
+
+const onResize = () => {
+  if (!containerRef.value) return;
+  camera.aspect = containerRef.value.clientWidth / containerRef.value.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(containerRef.value.clientWidth, containerRef.value.clientHeight);
+};
+
+onMounted(() => fetchProject());
+onBeforeUnmount(() => {
+  cancelAnimationFrame(animationId);
+  window.removeEventListener('resize', onResize);
+  window.removeEventListener('click', closeMenu);
+  if (containerRef.value) containerRef.value.removeEventListener('wheel', onMouseWheel);
+  if (renderer) renderer.dispose();
+});
+</script>
+
+<style scoped>
+/* 这里样式与之前基本一致，只需增加 context-menu 的样式 */
+.editor-layout { display: flex; height: 100vh; background: #1a1a1a; color: #ccc; }
+.viewport { flex: 1; position: relative; background: #000; }
+.three-container { width: 100%; height: 100%; }
+.viewport-header {
+  position: absolute; top: 0; left: 0; right: 0; height: 56px;
+  background: rgba(30,30,30,0.9); border-bottom: 1px solid #333;
+  display: flex; justify-content: space-between; align-items: center; padding: 0 20px; z-index: 10;
+}
+.back-btn { background: none; border: none; color: #aaa; cursor: pointer; font-size: 14px; }
+.back-btn:hover { color: white; }
+.scene-name { font-size: 16px; font-weight: bold; color: white; }
+.center-cross { 
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  color: rgba(255,255,255,0.5); font-size: 20px; pointer-events: none;
+}
+
+/* [新增] 上下文菜单样式 */
+.context-menu {
+  position: fixed; z-index: 9999;
+  background: #333; border: 1px solid #444; border-radius: 4px;
+  padding: 5px 0; min-width: 160px; box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+}
+.context-menu .item {
+  padding: 8px 15px; font-size: 13px; color: #ddd; cursor: pointer;
+}
+.context-menu .item:hover { background: #444; color: #fff; }
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* 侧边栏及其他样式保持不变 (复用之前的 CSS) */
+.sidebar { width: 360px; background: #252526; border-left: 1px solid #333; display: flex; flex-direction: column; }
+.panel-header { height: 56px; line-height: 56px; padding: 0 20px; font-size: 16px; font-weight: bold; background: #252526; border-bottom: 1px solid #333; color: white; }
+.panel-body { flex: 1; padding: 20px; overflow-y: auto; }
+.section-block { margin-bottom: 25px; }
+.section-block h3 { font-size: 14px; color: #3498db; margin: 0 0 5px 0; text-transform: uppercase; }
+.desc { font-size: 12px; color: #777; margin-bottom: 15px; }
+.action-grid { display: flex; gap: 10px; margin-bottom: 15px; }
+.action-btn { flex: 1; padding: 10px 5px; background: #333; border: 1px solid #444; color: #ccc; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.action-btn.primary { background: rgba(52,152,219,0.1); border-color: #3498db; color: #3498db; }
+.action-btn:hover { background: #444; color: white; }
+.data-display { display: flex; justify-content: space-between; background: #1e1e1e; padding: 8px; border-radius: 4px; }
+.tag { font-size: 12px; color: #f1c40f; font-family: monospace; }
+.divider { border: 0; border-top: 1px solid #333; margin: 25px 0; }
+.control-row { margin-bottom: 20px; }
+.control-row label { display: block; font-size: 12px; margin-bottom: 8px; color: #aaa; }
+.sub-desc { font-size: 11px; color: #555; margin-top: 5px; text-align: right; }
+.save-primary-btn { background: #3498db; color: white; border: none; padding: 8px 24px; border-radius: 4px; font-weight: 600; cursor: pointer; }
+.save-primary-btn:hover { background: #2980b9; }
+</style>

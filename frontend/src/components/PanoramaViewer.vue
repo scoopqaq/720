@@ -12,12 +12,15 @@
       <div class="tip" v-if="currentRoomId">当前位置: {{ currentRoomName }}</div>
     </div>
 
-    <div v-if="isLoading" class="loading-mask">
-      {{ loadingText }}
-    </div>
+    <div v-if="isLoading" class="loading-mask">{{ loadingText }}</div>
 
     <div v-if="menuVisible" class="context-menu" :style="{ left: menuPos.x + 'px', top: menuPos.y + 'px' }">
       <div class="item" @click="toggleRotate">{{ isRotating ? '⏸ 暂停旋转' : '▶ 继续旋转' }}</div>
+      
+      <div class="item" @click="toggleDirection">
+        ⇄ 拖拽方向: {{ isReverse ? '反向 (拖拽画面)' : '正向 (转动相机)' }}
+      </div>
+      
       <div class="item" @click="resetCamera">↺ 视角复位</div>
       <div class="item" @click="toggleFullscreen">{{ isFullscreen ? '⛶ 退出全屏' : '⛶ 全屏模式' }}</div>
     </div>
@@ -30,36 +33,34 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import gsap from 'gsap';
 
-// 接收外部传入的项目ID
 const props = defineProps({
-  projectId: {
-    type: Number,
-    required: true
-  }
+  projectId: { type: Number, required: true }
 });
-
 const emit = defineEmits(['back']);
 
-// --- 数据状态 ---
 const containerRef = ref(null);
-const roomsConfig = ref({}); // 存放转换后的场景数据
-const currentRoomId = ref(null); // 当前房间ID (数据库ID)
+const roomsConfig = ref({});
+const currentRoomId = ref(null);
 const isLoading = ref(true);
 const loadingText = ref('正在读取项目数据...');
 
-// --- Three.js 变量 ---
 let scene, camera, renderer, controls, animationId;
 let textureLoader, raycaster, pointer;
 let hotspotMeshes = [];
 let sphereMesh1, sphereMesh2;
 let activeSphereIndex = 1;
 
-// --- 菜单状态 ---
+// 菜单状态
 const menuVisible = ref(false);
 const menuPos = ref({ x: 0, y: 0 });
 const isRotating = ref(true);
 const isFullscreen = ref(false);
 const isTransitioning = ref(false);
+
+// [新增] 拖拽方向状态 (默认为 false: 正向)
+// 正向: 鼠标左滑 -> 相机左转 (看到左边) -> rotateSpeed > 0
+// 反向: 鼠标左滑 -> 画面左移 (相机右转) -> rotateSpeed < 0
+const isReverse = ref(false); 
 
 const currentRoomName = computed(() => {
   if (currentRoomId.value && roomsConfig.value[currentRoomId.value]) {
@@ -68,31 +69,21 @@ const currentRoomName = computed(() => {
   return '';
 });
 
-// =========================================
-// 1. 初始化：从后端获取数据
-// =========================================
 const fetchProjectData = async () => {
+  // ... (保持原有的 fetch 逻辑不变)
   try {
     const res = await fetch(`http://127.0.0.1:8000/projects/${props.projectId}`);
     if (!res.ok) throw new Error('项目不存在');
     const projectData = await res.json();
-    
-    // [关键] 数据格式转换
-    // 后端格式: scenes: [{id, name, image_url, hotspots: [...]}]
-    // 前端需要: { [id]: { texture, hotspots: [...] } }
-    
     const config = {};
     if (!projectData.scenes || projectData.scenes.length === 0) {
       alert("该项目没有场景！");
       return;
     }
-
     projectData.scenes.forEach(scene => {
       config[scene.id] = {
         name: scene.name,
         texture: `http://127.0.0.1:8000${scene.image_url}?t=${new Date().getTime()}`,
-        // [修改] 加一个 || [] 的判断
-        // 意思是：如果 scene.hotspots 是 undefined，就用空数组 [] 代替，防止报错
         hotspots: (scene.hotspots || []).map(h => ({
           target: h.target_scene_id,
           position: [h.x, h.y, h.z],
@@ -100,22 +91,16 @@ const fetchProjectData = async () => {
         }))
       };
     });
-
     roomsConfig.value = config;
-    
-    // 初始化 Three.js
-    initThree(projectData.scenes[0].id); // 默认进入第一个场景
-
+    initThree(projectData.scenes[0].id);
   } catch (err) {
     console.error(err);
     loadingText.value = "加载失败";
   }
 };
 
-// =========================================
-// 2. Three.js 核心逻辑
-// =========================================
 const initThree = (initialRoomId) => {
+  // ... (前面的 Three 初始化代码保持不变) ...
   if (!containerRef.value) return;
   const width = containerRef.value.clientWidth;
   const height = containerRef.value.clientHeight;
@@ -129,7 +114,6 @@ const initThree = (initialRoomId) => {
   renderer.setPixelRatio(window.devicePixelRatio);
   containerRef.value.appendChild(renderer.domElement);
 
-  // 双球体设置
   const geometry = new THREE.SphereGeometry(500, 60, 40);
   geometry.scale(-1, 1, 1);
 
@@ -154,110 +138,111 @@ const initThree = (initialRoomId) => {
   controls.autoRotateSpeed = 0.5;
   controls.enableZoom = false;
 
-  // 加载初始房间
-  loadRoom(initialRoomId, false);
+  // [关键] 初始化时应用当前方向设置
+  // 0.5 是正向速度，-0.5 是反向速度
+  controls.rotateSpeed = isReverse.value ? -0.5 : 0.5;
 
+  loadRoom(initialRoomId, false);
   animate();
   
-  // 事件绑定
   window.addEventListener('resize', onWindowResize);
   window.addEventListener('contextmenu', onContextMenu);
   window.addEventListener('click', closeMenu);
   containerRef.value.addEventListener('wheel', onMouseWheel, { passive: false });
 };
 
+// ... (loadRoom, clearHotspots, createHotspots, onPointerDown, onMouseWheel 保持不变) ...
 const loadRoom = (roomId, animate = true) => {
-  if (isTransitioning.value && animate) return;
-  const roomData = roomsConfig.value[roomId];
-  if (!roomData) return;
+    // ... (保持原有代码不变) ...
+    if (isTransitioning.value && animate) return;
+    const roomData = roomsConfig.value[roomId];
+    if (!roomData) return;
 
-  isLoading.value = true;
-  loadingText.value = "场景切换中...";
-  if (animate) isTransitioning.value = true;
+    isLoading.value = true;
+    loadingText.value = "场景切换中...";
+    if (animate) isTransitioning.value = true;
 
-  const currentSphere = activeSphereIndex === 1 ? sphereMesh1 : sphereMesh2;
-  const nextSphere = activeSphereIndex === 1 ? sphereMesh2 : sphereMesh1;
+    const currentSphere = activeSphereIndex === 1 ? sphereMesh1 : sphereMesh2;
+    const nextSphere = activeSphereIndex === 1 ? sphereMesh2 : sphereMesh1;
 
-  clearHotspots();
+    clearHotspots();
 
-  textureLoader.load(roomData.texture, (texture) => {
-    texture.colorSpace = THREE.SRGBColorSpace;
-    nextSphere.material.map = texture;
-    nextSphere.material.needsUpdate = true;
-    nextSphere.renderOrder = 1;
-    currentSphere.renderOrder = 0;
+    textureLoader.load(roomData.texture, (texture) => {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        nextSphere.material.map = texture;
+        nextSphere.material.needsUpdate = true;
+        nextSphere.renderOrder = 1;
+        currentSphere.renderOrder = 0;
 
-    isLoading.value = false;
+        isLoading.value = false;
 
-    if (animate) {
-      nextSphere.material.opacity = 0;
-      nextSphere.visible = true;
-      
-      gsap.to(nextSphere.material, {
-        opacity: 1, duration: 1.0, ease: "power2.inOut",
-        onComplete: () => {
-          currentSphere.visible = false;
-          currentSphere.material.opacity = 0;
-          activeSphereIndex = activeSphereIndex === 1 ? 2 : 1;
-          createHotspots(roomData.hotspots);
-          currentRoomId.value = roomId;
-          isTransitioning.value = false;
+        if (animate) {
+        nextSphere.material.opacity = 0;
+        nextSphere.visible = true;
+        
+        gsap.to(nextSphere.material, {
+            opacity: 1, duration: 1.0, ease: "power2.inOut",
+            onComplete: () => {
+            currentSphere.visible = false;
+            currentSphere.material.opacity = 0;
+            activeSphereIndex = activeSphereIndex === 1 ? 2 : 1;
+            createHotspots(roomData.hotspots);
+            currentRoomId.value = roomId;
+            isTransitioning.value = false;
+            }
+        });
+        } else {
+        nextSphere.material.opacity = 1;
+        nextSphere.visible = true;
+        currentSphere.visible = false;
+        activeSphereIndex = activeSphereIndex === 1 ? 2 : 1;
+        createHotspots(roomData.hotspots);
+        currentRoomId.value = roomId;
+        isLoading.value = false;
         }
-      });
-    } else {
-      nextSphere.material.opacity = 1;
-      nextSphere.visible = true;
-      currentSphere.visible = false;
-      activeSphereIndex = activeSphereIndex === 1 ? 2 : 1;
-      createHotspots(roomData.hotspots);
-      currentRoomId.value = roomId;
-      isLoading.value = false;
-    }
-  });
+    });
 };
 
 const clearHotspots = () => {
-  hotspotMeshes.forEach(mesh => {
-    scene.remove(mesh);
-    mesh.geometry.dispose();
-    mesh.material.dispose();
-  });
-  hotspotMeshes = [];
+    hotspotMeshes.forEach(mesh => {
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+        mesh.material.dispose();
+    });
+    hotspotMeshes = [];
 };
 
 const createHotspots = (hotspotsData) => {
-  if (!hotspotsData) return;
-  hotspotsData.forEach(hs => {
-    // 检查目标房间是否存在
-    if (!roomsConfig.value[hs.target]) return; 
-
-    const geometry = new THREE.SphereGeometry(15, 32, 16);
-    const material = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0 });
-    const hotspot = new THREE.Mesh(geometry, material);
-    hotspot.position.set(...hs.position);
-    hotspot.userData = { targetRoom: hs.target, text: hs.text };
-    scene.add(hotspot);
-    hotspotMeshes.push(hotspot);
-    gsap.to(material, { opacity: 0.8, duration: 0.5, delay: 0.5 });
-  });
+    if (!hotspotsData) return;
+    hotspotsData.forEach(hs => {
+        if (!roomsConfig.value[hs.target]) return; 
+        const geometry = new THREE.SphereGeometry(15, 32, 16);
+        const material = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0 });
+        const hotspot = new THREE.Mesh(geometry, material);
+        hotspot.position.set(...hs.position);
+        hotspot.userData = { targetRoom: hs.target, text: hs.text };
+        scene.add(hotspot);
+        hotspotMeshes.push(hotspot);
+        gsap.to(material, { opacity: 0.8, duration: 0.5, delay: 0.5 });
+    });
 };
 
 const onPointerDown = (event) => {
-  if (isTransitioning.value || !containerRef.value) return;
-  const rect = containerRef.value.getBoundingClientRect();
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointer, camera);
-  const intersects = raycaster.intersectObjects(hotspotMeshes);
-  if (intersects.length > 0) {
-    loadRoom(intersects[0].object.userData.targetRoom, true);
-  }
+    if (isTransitioning.value || !containerRef.value) return;
+    const rect = containerRef.value.getBoundingClientRect();
+    pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    const intersects = raycaster.intersectObjects(hotspotMeshes);
+    if (intersects.length > 0) {
+        loadRoom(intersects[0].object.userData.targetRoom, true);
+    }
 };
 
 const onMouseWheel = (e) => {
-  e.preventDefault();
-  camera.fov = Math.max(30, Math.min(100, camera.fov + e.deltaY * 0.05));
-  camera.updateProjectionMatrix();
+    e.preventDefault();
+    camera.fov = Math.max(30, Math.min(100, camera.fov + e.deltaY * 0.05));
+    camera.updateProjectionMatrix();
 };
 
 const animate = () => {
@@ -273,7 +258,6 @@ const onWindowResize = () => {
   renderer.setSize(containerRef.value.clientWidth, containerRef.value.clientHeight);
 };
 
-// ... 菜单逻辑保持不变 ...
 const onContextMenu = (e) => { e.preventDefault(); menuPos.value = {x:e.clientX, y:e.clientY}; menuVisible.value = true; };
 const closeMenu = () => { menuVisible.value = false; };
 const toggleRotate = () => { isRotating.value = !isRotating.value; controls.autoRotate = isRotating.value; };
@@ -281,6 +265,16 @@ const resetCamera = () => { controls.reset(); camera.fov=75; camera.updateProjec
 const toggleFullscreen = () => {
   if (!document.fullscreenElement) { document.documentElement.requestFullscreen(); isFullscreen.value = true; }
   else { document.exitFullscreen(); isFullscreen.value = false; }
+};
+
+// [新增] 切换方向逻辑
+const toggleDirection = () => {
+  if (!controls) return;
+  isReverse.value = !isReverse.value;
+  // 翻转 rotateSpeed 的符号
+  // Math.abs 确保我们取绝对值后再根据状态赋正负，防止多次切换出错
+  const speed = 0.5;
+  controls.rotateSpeed = isReverse.value ? -speed : speed;
 };
 
 onMounted(() => {
@@ -299,11 +293,10 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* 样式基本复用之前的，加一个返回按钮样式 */
+/* 样式保持不变 */
 .viewer-wrapper { width: 100%; height: 100vh; position: relative; background: #000; overflow: hidden; }
 .three-container { width: 100%; height: 100%; cursor: grab; }
 .three-container:active { cursor: grabbing; }
-
 .ui-layer { pointer-events: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
 .back-btn {
   pointer-events: auto; position: absolute; top: 20px; left: 20px;
@@ -311,7 +304,6 @@ onBeforeUnmount(() => {
   padding: 8px 16px; border-radius: 4px; cursor: pointer; transition: background 0.2s;
 }
 .back-btn:hover { background: rgba(0,0,0,0.8); }
-
 .tip { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.8); background: rgba(0,0,0,0.6); padding: 8px 16px; border-radius: 20px; font-size: 14px; }
 .loading-mask { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); padding: 20px 40px; border-radius: 8px; color: white; z-index: 20; }
 .context-menu { position: absolute; z-index: 999; background: rgba(255,255,255,0.95); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); padding: 6px 0; min-width: 140px; user-select: none; pointer-events: auto; }
