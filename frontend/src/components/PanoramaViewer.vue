@@ -8,11 +8,48 @@
     ></div>
 
     <div class="ui-layer">
-      <button class="back-btn" @click="$emit('back')">← 返回列表</button>
-      <div class="tip" v-if="currentRoomId">当前位置: {{ currentRoomName }}</div>
+      <div class="top-bar">
+        <button class="back-btn" @click="$emit('back')">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+        </button>
+        <div class="project-title" v-if="projectInfo">{{ projectInfo.name }}</div>
+      </div>
+
+      <div class="bottom-controls">
+        <div class="scene-toggle-btn" @click="showSceneBar = !showSceneBar" :class="{ active: showSceneBar }">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
+          <span>场景选择</span>
+        </div>
+      </div>
+
+      <transition name="slide-up">
+        <div v-if="showSceneBar" class="scene-bar-overlay">
+          <div class="scene-bar-scroll">
+            <div 
+              v-for="scene in flatScenes" 
+              :key="scene.id" 
+              class="scene-thumb"
+              :class="{ active: currentRoomId === scene.id }"
+              @click="switchScene(scene.id)"
+            >
+              <div class="thumb-img-box">
+                <img :src="getThumb(scene)" loading="lazy" />
+                <div class="scene-name-tag">{{ scene.name }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </transition>
+
+      <transition name="fade">
+        <div class="tip-toast" v-if="tipVisible">{{ tipMessage }}</div>
+      </transition>
     </div>
 
-    <div v-if="isLoading" class="loading-mask">{{ loadingText }}</div>
+    <div v-if="isLoading" class="loading-mask">
+      <div class="spinner"></div>
+      <p>场景加载中...</p>
+    </div>
 
     <div v-if="menuVisible" class="context-menu" :style="{ left: menuPos.x + 'px', top: menuPos.y + 'px' }">
       <div class="item" @click="toggleRotate">{{ isRotating ? '⏸ 暂停旋转' : '▶ 继续旋转' }}</div>
@@ -24,7 +61,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import gsap from 'gsap';
@@ -36,8 +73,20 @@ const containerRef = ref(null);
 const roomsConfig = ref({});
 const currentRoomId = ref(null);
 const isLoading = ref(true);
-const loadingText = ref('加载中...');
+const showSceneBar = ref(false); // 控制底部栏显示
+const projectInfo = ref(null);
+const flatScenes = ref([]); // 扁平化的场景列表，用于底部栏显示
 
+// 提示相关
+const tipVisible = ref(false);
+const tipMessage = ref('');
+const showTip = (msg) => {
+  tipMessage.value = msg;
+  tipVisible.value = true;
+  setTimeout(() => tipVisible.value = false, 2000);
+};
+
+// Three.js 变量
 let scene, camera, renderer, controls, animationId;
 let textureLoader, raycaster, pointer;
 let hotspotMeshes = [];
@@ -52,81 +101,91 @@ const isFullscreen = ref(false);
 const isTransitioning = ref(false);
 const isReverse = ref(false);
 
-const currentRoomName = computed(() => {
-  if (currentRoomId.value && roomsConfig.value[currentRoomId.value]) {
-    return roomsConfig.value[currentRoomId.value].name;
-  }
-  return '';
-});
-
-// 1. 获取数据并映射
+// 1. 获取并处理数据
 const fetchProjectData = async () => {
   try {
     const res = await fetch(`http://127.0.0.1:8000/projects/${props.projectId}`);
     if (!res.ok) throw new Error('项目不存在');
-    const projectData = await res.json();
-    
+    const data = await res.json();
+    projectInfo.value = data;
+
     const config = {};
-    if (!projectData.scenes || projectData.scenes.length === 0) {
-      alert("无场景数据");
+    const sceneList = [];
+
+    if (!data.groups || data.groups.length === 0) {
+      alert("该项目没有任何场景");
       return;
     }
 
-    projectData.scenes.forEach(scene => {
-      config[scene.id] = {
-        name: scene.name,
-        texture: `http://127.0.0.1:8000${scene.image_url}?t=${new Date().getTime()}`,
-        hotspots: (scene.hotspots || []).map(h => ({
-          target: h.target_scene_id,
-          position: [h.x, h.y, h.z],
-          text: h.text
-        })),
-        // [关键修复] 完整读取后端保存的参数
-        // 如果是新创建的场景没有值，给予默认兜底
-        initial_heading: scene.initial_heading ?? 0,
-        initial_pitch: scene.initial_pitch ?? 0,
-        fov_default: scene.fov_default ?? 95,
-        fov_min: scene.fov_min ?? 70,
-        fov_max: scene.fov_max ?? 120,
-        limit_h_min: scene.limit_h_min ?? -180,
-        limit_h_max: scene.limit_h_max ?? 180,
-        limit_v_min: scene.limit_v_min ?? -90,
-        limit_v_max: scene.limit_v_max ?? 90,
-      };
+    // 遍历所有分组和场景
+    data.groups.forEach(group => {
+      if (group.scenes) {
+        group.scenes.forEach(scene => {
+          sceneList.push(scene); // 加入列表给底部栏用
+          
+          config[scene.id] = {
+            name: scene.name,
+            texture: `http://127.0.0.1:8000${scene.image_url}?t=${new Date().getTime()}`,
+            cover: scene.cover_url ? `http://127.0.0.1:8000${scene.cover_url}` : `http://127.0.0.1:8000${scene.image_url}`,
+            hotspots: (scene.hotspots || []).map(h => ({
+              target: h.target_scene_id,
+              position: [h.x, h.y, h.z],
+              text: h.text
+            })),
+            // 读取编辑器保存的设置
+            initial_heading: scene.initial_heading ?? 0,
+            initial_pitch: scene.initial_pitch ?? 0,
+            fov_default: scene.fov_default ?? 95,
+            fov_min: scene.fov_min ?? 70,
+            fov_max: scene.fov_max ?? 120,
+            limit_h_min: scene.limit_h_min ?? -180,
+            limit_h_max: scene.limit_h_max ?? 180,
+            limit_v_min: scene.limit_v_min ?? -90,
+            limit_v_max: scene.limit_v_max ?? 90,
+          };
+        });
+      }
     });
 
+    flatScenes.value = sceneList;
     roomsConfig.value = config;
-    // 默认进第一个
-    initThree(projectData.scenes[0].id);
+
+    if (sceneList.length > 0) {
+      initThree(sceneList[0].id);
+    }
 
   } catch (err) {
     console.error(err);
-    loadingText.value = "数据加载失败";
+    alert("数据加载失败");
   }
 };
 
+const getThumb = (scene) => {
+  if (scene.cover_url) return `http://127.0.0.1:8000${scene.cover_url}?t=s`;
+  return `http://127.0.0.1:8000${scene.image_url}?t=s`;
+};
+
+// 2. 初始化 Three.js
 const initThree = (initialRoomId) => {
   if (!containerRef.value) return;
   const width = containerRef.value.clientWidth;
   const height = containerRef.value.clientHeight;
 
   scene = new THREE.Scene();
-  // 初始FOV先给个默认值，后面 loadRoom 会覆盖
   camera = new THREE.PerspectiveCamera(95, width / height, 0.1, 1000);
   camera.position.set(0, 0, 0.1);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer = new THREE.WebGLRenderer({ antialias: false });
   renderer.setSize(width, height);
-  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   containerRef.value.appendChild(renderer.domElement);
 
   const geometry = new THREE.SphereGeometry(500, 60, 40);
   geometry.scale(-1, 1, 1);
 
+  // 双球体交替加载
   sphereMesh1 = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ transparent: true, opacity: 1 }));
-  // 这里旋转 -90度 是为了让全景图的 "正前方" 对准 Z轴负方向
-  // 所有的 heading 计算都是基于这个 offset 的
-  sphereMesh1.rotation.y = -Math.PI / 2;
+  sphereMesh1.rotation.y = -Math.PI / 2; 
   sphereMesh1.renderOrder = 1;
   scene.add(sphereMesh1);
 
@@ -142,9 +201,10 @@ const initThree = (initialRoomId) => {
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
   controls.autoRotate = true;
   controls.autoRotateSpeed = 0.5;
-  controls.enableZoom = false; // 手动接管缩放
+  controls.enableZoom = false; // 禁用自带缩放
 
   loadRoom(initialRoomId, false);
   animate();
@@ -153,6 +213,13 @@ const initThree = (initialRoomId) => {
   window.addEventListener('contextmenu', onContextMenu);
   window.addEventListener('click', closeMenu);
   containerRef.value.addEventListener('wheel', onMouseWheel, { passive: false });
+};
+
+// 3. 切换场景
+const switchScene = (id) => {
+  if (currentRoomId.value === id) return;
+  loadRoom(id, true);
+  showSceneBar.value = false; // 切换后自动收起
 };
 
 const loadRoom = (roomId, animate = true) => {
@@ -175,10 +242,11 @@ const loadRoom = (roomId, animate = true) => {
     nextSphere.renderOrder = 1;
     currentSphere.renderOrder = 0;
 
-    // [关键修复] 应用保存的参数
-    applyRoomSettings(roomData);
+    applyRoomSettings(roomData); // 应用编辑器设置
 
     isLoading.value = false;
+    currentRoomId.value = roomId;
+    showTip(roomData.name);
 
     if (animate) {
       nextSphere.material.opacity = 0;
@@ -190,7 +258,6 @@ const loadRoom = (roomId, animate = true) => {
           currentSphere.material.opacity = 0;
           activeSphereIndex = activeSphereIndex === 1 ? 2 : 1;
           createHotspots(roomData.hotspots);
-          currentRoomId.value = roomId;
           isTransitioning.value = false;
         }
       });
@@ -200,21 +267,20 @@ const loadRoom = (roomId, animate = true) => {
       currentSphere.visible = false;
       activeSphereIndex = activeSphereIndex === 1 ? 2 : 1;
       createHotspots(roomData.hotspots);
-      currentRoomId.value = roomId;
       isLoading.value = false;
     }
   });
 };
 
-// [新增] 统一的应用设置函数
+// [核心] 应用编辑器保存的参数
 const applyRoomSettings = (data) => {
   if (!camera || !controls) return;
 
-  // 1. 设置 FOV
+  // 1. FOV
   camera.fov = data.fov_default;
   camera.updateProjectionMatrix();
 
-  // 2. 设置限制 (Infinite Check)
+  // 2. 水平限制
   if (data.limit_h_min <= -180 && data.limit_h_max >= 180) {
     controls.minAzimuthAngle = -Infinity;
     controls.maxAzimuthAngle = Infinity;
@@ -223,24 +289,19 @@ const applyRoomSettings = (data) => {
     controls.maxAzimuthAngle = data.limit_h_max * (Math.PI / 180);
   }
 
-  // [关键] 垂直限制转换
-  // UI: 90(Top), -90(Bottom)
-  // Three: 0(Top), PI(Bottom)
-  // minPolar (Top Limit) comes from UI Max
+  // 3. 垂直限制 (Editor: -90 Bottom, 90 Top -> Three: PI Bottom, 0 Top)
+  // Top Limit (UI Max) -> Three Min
   controls.minPolarAngle = (90 - data.limit_v_max) * (Math.PI / 180);
-  // maxPolar (Bottom Limit) comes from UI Min
+  // Bottom Limit (UI Min) -> Three Max
   controls.maxPolarAngle = (90 - data.limit_v_min) * (Math.PI / 180);
 
-  // 3. 设置初始视角
-  controls.reset(); // 先清除之前的旋转
-  
-  // 转换角度
+  // 4. 初始视角 (Editor: Heading -> Azimuth, Pitch -> Polar)
+  // Pitch (UI -90~90) -> Polar (PI~0)
+  // Formula: Polar = (90 - Pitch) * (PI/180)
+  controls.reset();
   const azimuth = data.initial_heading * (Math.PI / 180);
   const polar = (90 - data.initial_pitch) * (Math.PI / 180);
   
-  // 移动相机到对应球面位置
-  // 因为球体本身转了 -90度，所以这里可能需要抵消，但 OrbitControls 是相对 Z 轴的
-  // 经测试，直接应用通常符合预期，如果方向偏了 90 度，这里 + Math.PI/2
   const r = 0.1;
   camera.position.x = r * Math.sin(polar) * Math.sin(azimuth);
   camera.position.y = r * Math.cos(polar);
@@ -249,21 +310,29 @@ const applyRoomSettings = (data) => {
   controls.update();
 };
 
-// ... 其他辅助函数 (clearHotspots, createHotspots, onPointerDown) 保持不变 ...
 const clearHotspots = () => { hotspotMeshes.forEach(mesh => { scene.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose(); }); hotspotMeshes = []; };
 const createHotspots = (list) => { 
   if(!list) return;
   list.forEach(hs => {
-    // 简略：创建热点逻辑，同之前
+    // 渲染热点
     const geometry = new THREE.SphereGeometry(15, 32, 16);
-    const material = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.8 });
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 }); // 白色更通用
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(...hs.position);
-    mesh.userData = { targetRoom: hs.target };
+    mesh.userData = { targetRoom: hs.target, text: hs.text };
+    
+    // 添加文字标签 (简单 Sprite)
+    // 这里为了演示简单用颜色区分，实际项目可以用 SpriteText
+    
     scene.add(mesh);
     hotspotMeshes.push(mesh);
+    
+    // 简单的入场动画
+    mesh.scale.set(0,0,0);
+    gsap.to(mesh.scale, { x:1, y:1, z:1, duration: 0.5, ease: "back.out(1.7)" });
   });
 };
+
 const onPointerDown = (e) => {
   if (isTransitioning.value) return;
   const rect = containerRef.value.getBoundingClientRect();
@@ -271,50 +340,36 @@ const onPointerDown = (e) => {
   pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
   const intersects = raycaster.intersectObjects(hotspotMeshes);
-  if (intersects.length > 0) loadRoom(intersects[0].object.userData.targetRoom, true);
+  if (intersects.length > 0) {
+    const targetId = intersects[0].object.userData.targetRoom;
+    if (roomsConfig.value[targetId]) {
+      loadRoom(targetId, true);
+    } else {
+      showTip("目标场景未定义");
+    }
+  }
 };
 
-// [修复] 滚轮逻辑：受 Min/Max 限制
 const onMouseWheel = (e) => {
   e.preventDefault();
   const roomData = roomsConfig.value[currentRoomId.value];
   if (!roomData) return;
-
-  const min = roomData.fov_min;
-  const max = roomData.fov_max;
   
   let newFov = camera.fov + e.deltaY * 0.05;
-  newFov = Math.max(min, Math.min(max, newFov));
+  newFov = Math.max(roomData.fov_min, Math.min(roomData.fov_max, newFov));
   
   camera.fov = newFov;
   camera.updateProjectionMatrix();
 };
 
-const animate = () => {
-  animationId = requestAnimationFrame(animate);
-  controls.update();
-  renderer.render(scene, camera);
-};
-
-const onWindowResize = () => {
-  if (!containerRef.value) return;
-  camera.aspect = containerRef.value.clientWidth / containerRef.value.clientHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(containerRef.value.clientWidth, containerRef.value.clientHeight);
-};
-
+const animate = () => { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); };
+const onWindowResize = () => { if (!containerRef.value) return; camera.aspect = containerRef.value.clientWidth / containerRef.value.clientHeight; camera.updateProjectionMatrix(); renderer.setSize(containerRef.value.clientWidth, containerRef.value.clientHeight); };
 const onContextMenu = (e) => { e.preventDefault(); menuPos.value = {x:e.clientX, y:e.clientY}; menuVisible.value = true; };
 const closeMenu = () => { menuVisible.value = false; };
 const toggleRotate = () => { isRotating.value = !isRotating.value; controls.autoRotate = isRotating.value; };
 const toggleDirection = () => { isReverse.value = !isReverse.value; controls.rotateSpeed = isReverse.value ? -0.5 : 0.5; };
-const resetCamera = () => { 
-  // 复位时重新应用当前房间的设置
-  if (currentRoomId.value) applyRoomSettings(roomsConfig.value[currentRoomId.value]);
-};
-const toggleFullscreen = () => {
-  if (!document.fullscreenElement) { document.documentElement.requestFullscreen(); isFullscreen.value = true; }
-  else { document.exitFullscreen(); isFullscreen.value = false; }
-};
+const resetCamera = () => { if (currentRoomId.value) applyRoomSettings(roomsConfig.value[currentRoomId.value]); };
+const toggleFullscreen = () => { if (!document.fullscreenElement) { document.documentElement.requestFullscreen(); isFullscreen.value = true; } else { document.exitFullscreen(); isFullscreen.value = false; } };
 
 onMounted(() => fetchProjectData());
 onBeforeUnmount(() => {
@@ -328,15 +383,68 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* 样式复用之前的 */
-.viewer-wrapper { width: 100%; height: 100vh; position: relative; background: #000; overflow: hidden; }
+.viewer-wrapper { width: 100%; height: 100vh; position: relative; background: #000; overflow: hidden; font-family: sans-serif; }
 .three-container { width: 100%; height: 100%; cursor: grab; }
 .three-container:active { cursor: grabbing; }
-.ui-layer { pointer-events: none; position: absolute; inset: 0; }
-.back-btn { pointer-events: auto; position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.5); color: white; border: 1px solid rgba(255,255,255,0.3); padding: 8px 16px; border-radius: 4px; cursor: pointer; }
-.tip { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.8); background: rgba(0,0,0,0.6); padding: 8px 16px; border-radius: 20px; font-size: 14px; }
-.loading-mask { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); padding: 20px 40px; border-radius: 8px; color: white; z-index: 20; }
-.context-menu { position: absolute; z-index: 999; background: rgba(255,255,255,0.95); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); padding: 6px 0; min-width: 140px; pointer-events: auto; }
-.context-menu .item { padding: 12px 20px; cursor: pointer; color: #333; }
+
+.ui-layer { pointer-events: none; position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; }
+
+/* 顶部栏 */
+.top-bar {
+  pointer-events: auto; background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+  padding: 15px 20px; display: flex; align-items: center; gap: 15px;
+}
+.back-btn { background: rgba(255,255,255,0.2); border: none; padding: 8px; border-radius: 50%; cursor: pointer; transition: background 0.2s; display: flex; }
+.back-btn:hover { background: rgba(255,255,255,0.4); }
+.project-title { color: white; font-size: 18px; font-weight: bold; text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+
+/* 底部开关 */
+.bottom-controls { pointer-events: auto; padding: 20px; display: flex; justify-content: center; }
+.scene-toggle-btn {
+  background: rgba(0,0,0,0.6); color: white; border: 1px solid rgba(255,255,255,0.3);
+  padding: 8px 20px; border-radius: 30px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  transition: all 0.3s; backdrop-filter: blur(5px);
+}
+.scene-toggle-btn:hover, .scene-toggle-btn.active { background: rgba(255,255,255,0.9); color: #333; }
+
+/* 场景栏 (弹出) */
+.scene-bar-overlay {
+  pointer-events: auto; position: absolute; bottom: 80px; left: 0; right: 0;
+  display: flex; justify-content: center; padding: 0 20px;
+}
+.scene-bar-scroll {
+  background: rgba(0,0,0,0.8); backdrop-filter: blur(10px); padding: 10px; border-radius: 12px;
+  display: flex; gap: 12px; overflow-x: auto; max-width: 100%; box-shadow: 0 5px 20px rgba(0,0,0,0.5);
+}
+.scene-thumb {
+  width: 100px; height: 70px; border-radius: 6px; overflow: hidden; position: relative;
+  cursor: pointer; border: 2px solid transparent; flex-shrink: 0; transition: transform 0.2s;
+}
+.scene-thumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0.6; transition: opacity 0.2s; }
+.scene-thumb:hover img { opacity: 1; }
+.scene-thumb.active { border-color: #3498db; transform: translateY(-3px); }
+.scene-thumb.active img { opacity: 1; }
+.scene-name-tag {
+  position: absolute; bottom: 0; left: 0; width: 100%; background: rgba(0,0,0,0.6);
+  color: white; font-size: 10px; text-align: center; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 提示与加载 */
+.tip-toast {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: rgba(0,0,0,0.7); color: white; padding: 10px 20px; border-radius: 30px; font-size: 16px;
+}
+.loading-mask { position: absolute; inset: 0; background: #000; z-index: 50; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #888; }
+.spinner { width: 40px; height: 40px; border: 4px solid #333; border-top-color: #fff; border-radius: 50%; animation: spin 1s infinite linear; margin-bottom: 15px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 菜单与动画 */
+.context-menu { position: fixed; z-index: 999; background: rgba(255,255,255,0.95); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); padding: 6px 0; min-width: 140px; pointer-events: auto; }
+.context-menu .item { padding: 12px 20px; cursor: pointer; color: #333; font-size: 14px; }
 .context-menu .item:hover { background-color: #f0f7ff; color: #007bff; }
+
+.slide-up-enter-active, .slide-up-leave-active { transition: all 0.3s ease; }
+.slide-up-enter-from, .slide-up-leave-to { transform: translateY(20px); opacity: 0; }
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

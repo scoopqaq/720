@@ -1,174 +1,117 @@
 <template>
-  <div class="editor-layout">
+  <div class="editor-root">
     
-    <div class="left-toolbar">
-      <div 
-        class="tool-btn" 
-        :class="{ active: activeTab === 'view' }"
-        @click="switchTab('view')"
-        title="基础视角设置"
-      >
-        👁️
-        <span class="tool-label">视角</span>
-      </div>
-      <div 
-        class="tool-btn" 
-        :class="{ active: activeTab === 'hotspot' }"
-        @click="switchTab('hotspot')"
-        title="热点编辑"
-      >
-        📍
-        <span class="tool-label">热点</span>
-      </div>
-    </div>
-
-    <div class="viewport">
-      <div 
-        ref="containerRef" 
-        class="three-container" 
-        @contextmenu.prevent="onContextMenu" 
-        @pointerdown="onViewportClick" 
-      ></div>
+    <header class="top-header">
       
-      <div class="viewport-header">
-        <button class="back-btn" @click="handleBack">← 返回</button>
-        <div class="scene-info" v-if="currentScene">
-          <span class="scene-name">{{ currentScene.name }}</span>
-          <span v-if="isModified" class="modified-dot" title="有未保存的修改">•</span>
-        </div>
-        <div class="header-actions">
-          <button class="save-primary-btn" :class="{ 'has-changes': isModified }" @click="saveAll" :disabled="saving">
-            {{ saving ? '保存中...' : (isModified ? '💾 保存*' : '💾 已保存') }}
-          </button>
-        </div>
+      <div class="header-left">
+        <button class="back-btn" @click="handleBack">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          返回列表
+        </button>
       </div>
+
+      <div class="header-center" v-if="currentScene">
+        <span class="scene-name">{{ currentScene.name }}</span>
+        <span v-if="isModified" class="modified-dot" title="有未保存修改">•</span>
+      </div>
+
+      <div class="header-right">
+        <button class="btn-text" @click="resetToDefaults">↺ 恢复默认</button>
+        <button class="save-btn" :class="{ 'has-changes': isModified }" @click="saveAll" :disabled="saving">
+          {{ saving ? '保存中...' : (isModified ? '💾 保存*' : '💾 已保存') }}
+        </button>
+      </div>
+    </header>
+
+    <div class="main-body">
       
-      <div v-if="activeTab === 'view'" class="center-cross">+</div>
-
-      <div class="toast-tip" v-if="activeTab === 'hotspot'">
-        提示：双击画面任意位置可添加新热点
-      </div>
-
-      <transition name="fade">
+      <aside class="left-toolbar">
         <div 
-          v-if="menuVisible" 
-          class="context-menu" 
-          :style="{ left: menuPos.x + 'px', top: menuPos.y + 'px' }"
+          class="tool-item" 
+          :class="{ active: activeTab === 'view' }"
+          @click="switchTab('view')"
+          title="基础设置"
         >
-          <div class="item" @click="toggleDirection">
-            ⇄ 拖拽方向: {{ isReverse ? '反向 (画面跟随)' : '正向 (相机跟随)' }}
-          </div>
-          <div class="item" @click="resetView">↺ 视角复位</div>
+          <div class="icon">👁️</div>
+          <span class="label">视角</span>
         </div>
-      </transition>
+        <div 
+          class="tool-item" 
+          :class="{ active: activeTab === 'hotspot' }"
+          @click="switchTab('hotspot')"
+          title="热点编辑"
+        >
+          <div class="icon">📍</div>
+          <span class="label">热点</span>
+        </div>
+      </aside>
+
+      <div class="viewport-area">
+        <div 
+          ref="containerRef" 
+          class="three-container"
+          @contextmenu.prevent="onContextMenu" 
+          @pointerdown="onViewportClick"
+        ></div>
+        
+        <div v-if="activeTab === 'view'" class="center-cross">+</div>
+        
+        <transition name="fade">
+          <div v-if="menuVisible" class="context-menu" :style="{ left: menuPos.x + 'px', top: menuPos.y + 'px' }">
+            <div class="item" @click="toggleDirection">⇄ 方向: {{ isReverse ? '反向' : '正向' }}</div>
+            <div class="item" @click="resetView">↺ 视角复位</div>
+          </div>
+        </transition>
+
+        <SceneManager 
+          v-if="projectData"
+          ref="sceneManagerRef"
+          :projectData="projectData"
+          :currentSceneId="currentScene ? currentScene.id : null"
+          @change-scene="switchScene"
+          @refresh-data="fetchProject"
+        />
+      </div>
+
+      <aside class="right-sidebar">
+        <div class="panel-header">
+          {{ activeTab === 'view' ? '视角参数配置' : '热点编辑管理' }}
+        </div>
+        
+        <PanelBasic 
+          v-if="activeTab === 'view'"
+          :settings="settings"
+          @update-camera="applyLimitsAndFOV"
+          @capture-initial="captureInitialState"
+          @capture-cover="captureCover"
+          @preview-fov="onFovPreview"
+          @preview-h-limit="onHLimitPreview"
+          @preview-v-limit="onVLimitPreview"
+        />
+
+        <PanelHotspot 
+          v-if="activeTab === 'hotspot'"
+          :list="hotspotList"
+          :selectedHotspot="selectedHotspot"
+          :otherScenes="otherScenes"
+          @select="selectHotspotByList"
+          @save="saveSelectedHotspot"
+          @delete="deleteSelectedHotspot"
+          @cancel="cancelHotspotSelection"
+        />
+      </aside>
+
     </div>
-
-    <div class="sidebar">
-      
-      <template v-if="activeTab === 'view'">
-        <div class="panel-header">基础视角设置</div>
-        <div class="panel-body" v-if="currentScene">
-           <div class="section-block">
-              <h3>初始视角 & 封面</h3>
-              <div class="action-grid">
-                <button class="action-btn primary" @click="captureInitialState">📍 设为初始视角</button>
-                <button class="action-btn" @click="captureCover">🖼️ 截取封面</button>
-              </div>
-              <div class="data-display">
-                <div class="tag">H: {{ Math.round(settings.initial_heading) }}°</div>
-                <div class="tag">V: {{ Math.round(settings.initial_pitch) }}°</div>
-                <div class="tag">FOV: {{ Math.round(settings.fov_default) }}</div>
-              </div>
-           </div>
-           <hr class="divider">
-           <div class="section-block">
-              <h3>FOV 设置</h3>
-              <div class="control-row">
-                <label>范围 ({{ settings.fov_min }} - {{ settings.fov_max }})</label>
-                <DualSlider :min="10" :max="140" v-model="fovRange" @change="onFovRangeChange" @preview="onFovPreview" />
-              </div>
-              <div class="control-row">
-                <label>默认: {{ Math.round(settings.fov_default) }}</label>
-                <input type="range" :min="settings.fov_min" :max="settings.fov_max" v-model.number="settings.fov_default" @input="updateCameraFOV">
-              </div>
-           </div>
-           <hr class="divider">
-           <div class="section-block">
-              <h3>视角限制</h3>
-              <div class="control-row">
-                <div class="label-row">
-                  <label>水平限制</label>
-                  <span class="status-tag" v-if="isFullHorizontal">360° 无限</span>
-                </div>
-                <DualSlider :min="-180" :max="180" v-model="hLimitRange" @change="onHLimitChange" @preview="onHLimitPreview" />
-              </div>
-              <div class="control-row">
-                <label>垂直限制</label>
-                <DualSlider :min="-90" :max="90" v-model="vLimitRange" @change="onVLimitChange" @preview="onVLimitPreview" />
-                <div class="val-display">{{ settings.limit_v_min }}°(底) ~ {{ settings.limit_v_max }}°(顶)</div>
-              </div>
-           </div>
-        </div>
-      </template>
-
-      <template v-if="activeTab === 'hotspot'">
-        <div class="panel-header">热点编辑</div>
-        <div class="panel-body">
-          <div v-if="selectedHotspot" class="hotspot-form">
-            <div class="section-block">
-              <h3>编辑热点</h3>
-              <div class="form-group">
-                <label>显示标题</label>
-                <input type="text" v-model="selectedHotspot.text" class="form-input">
-              </div>
-              <div class="form-group">
-                <label>跳转目标</label>
-                <select v-model="selectedHotspot.target_scene_id" class="form-select">
-                  <option disabled value="">请选择...</option>
-                  <option v-for="s in otherScenes" :key="s.id" :value="s.id">{{ s.name }}</option>
-                </select>
-              </div>
-              <div class="btn-row">
-                <button class="btn-danger" @click="deleteSelectedHotspot">删除</button>
-                <button class="btn-primary" @click="saveSelectedHotspot">保存</button>
-              </div>
-            </div>
-          </div>
-          <div v-else class="empty-tip">
-            <p>👋 操作指南：</p>
-            <ul>
-              <li><strong>双击画面</strong>：添加热点</li>
-              <li><strong>点击红球</strong>：编辑热点</li>
-            </ul>
-            <hr class="divider">
-            <div class="hotspot-list">
-              <h4>热点列表 ({{ hotspotList.length }})</h4>
-              <div v-for="h in hotspotList" :key="h.id" class="hotspot-item" @click="selectHotspotByList(h)">
-                <span class="icon">📍</span> <span class="name">{{ h.text }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </template>
-    </div>
-
-    <SceneManager 
-      v-if="projectData"
-      ref="sceneManagerRef"
-      :projectData="projectData"
-      :currentSceneId="currentScene ? currentScene.id : null"
-      @change-scene="switchScene"
-      @refresh-data="fetchProject"
-    />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import DualSlider from './DualSlider.vue';
 import SceneManager from './SceneManager.vue';
+import PanelBasic from './editor/PanelBasic.vue';
+import PanelHotspot from './editor/PanelHotspot.vue';
 
 const props = defineProps(['projectId']);
 const emit = defineEmits(['back']);
@@ -182,6 +125,7 @@ const containerRef = ref(null);
 const sceneManagerRef = ref(null);
 const saving = ref(false);
 
+// 设置
 const DEFAULT_SETTINGS = {
   initial_heading: 0, initial_pitch: 0,
   fov_min: 70, fov_max: 120, fov_default: 95,
@@ -189,30 +133,21 @@ const DEFAULT_SETTINGS = {
   limit_v_min: -90, limit_v_max: 90,
 };
 const settings = reactive({ ...DEFAULT_SETTINGS });
-// 原始设置 Json (用于脏检查)
 const originalSettingsJson = ref(JSON.stringify(DEFAULT_SETTINGS));
 const isModified = computed(() => JSON.stringify(settings) !== originalSettingsJson.value);
 
-// 热点状态
+// 热点
 const hotspotList = ref([]);
 const selectedHotspot = ref(null);
+const otherScenes = computed(() => currentScene.value ? scenes.value.filter(s => s.id !== currentScene.value.id) : []);
 
 // Three.js
 let scene, camera, renderer, controls, sphereMesh, textureLoader, raycaster, pointer;
 let hotspotMeshes = [];
 let animationId;
-
-// [修复] 菜单与方向状态
 const menuVisible = ref(false);
 const menuPos = ref({ x: 0, y: 0 });
-const isReverse = ref(false); // 拖拽方向
-
-// Computed
-const fovRange = computed({ get: () => [settings.fov_min, settings.fov_max], set: (v) => { settings.fov_min = v[0]; settings.fov_max = v[1]; } });
-const hLimitRange = computed({ get: () => [settings.limit_h_min, settings.limit_h_max], set: (v) => { settings.limit_h_min = v[0]; settings.limit_h_max = v[1]; } });
-const vLimitRange = computed({ get: () => [settings.limit_v_min, settings.limit_v_max], set: (v) => { settings.limit_v_min = v[0]; settings.limit_v_max = v[1]; } });
-const isFullHorizontal = computed(() => settings.limit_h_min <= -180 && settings.limit_h_max >= 180);
-const otherScenes = computed(() => currentScene.value ? scenes.value.filter(s => s.id !== currentScene.value.id) : []);
+const isReverse = ref(false);
 
 // --- 初始化 ---
 const fetchProject = async () => {
@@ -225,9 +160,11 @@ const fetchProject = async () => {
     scenes.value = allScenes;
 
     if (allScenes.length > 0) {
-      if (!currentScene.value) loadScene(allScenes[0].id);
-      else {
-        const fresh = allScenes.find(s => s.id === currentScene.value.id);
+      if (!currentScene.value || !allScenes.find(s=>s.id===currentScene.value.id)) {
+        loadScene(allScenes[0].id);
+      } else {
+        // 刷新当前场景数据
+        const fresh = allScenes.find(s=>s.id===currentScene.value.id);
         if(fresh) currentScene.value = fresh;
       }
     }
@@ -239,9 +176,9 @@ const loadScene = (sceneId) => {
   const target = scenes.value.find(s => s.id == sceneId);
   if (!target) return;
   currentScene.value = target;
-  
+
   Object.keys(DEFAULT_SETTINGS).forEach(key => settings[key] = target[key] ?? DEFAULT_SETTINGS[key]);
-  originalSettingsJson.value = JSON.stringify(settings); // 更新基准
+  originalSettingsJson.value = JSON.stringify(settings);
 
   hotspotList.value = (target.hotspots || []).map(h => ({
     id: h.id, text: h.text, target_scene_id: h.target_scene_id, position: [h.x, h.y, h.z]
@@ -285,8 +222,7 @@ const initThree = () => {
   controls.enableDamping = true;
   controls.dampingFactor = 0.1;
   controls.enableZoom = false; 
-  // [修复] 初始化应用方向
-  controls.rotateSpeed = isReverse.value ? -0.5 : 0.5;
+  controls.rotateSpeed = 0.5;
 
   raycaster = new THREE.Raycaster();
   pointer = new THREE.Vector2();
@@ -296,42 +232,72 @@ const initThree = () => {
 
   animate();
   window.addEventListener('resize', onResize);
-  // [修复] 全局点击关闭菜单
-  window.addEventListener('click', closeMenu);
+  window.addEventListener('click', () => menuVisible.value = false);
 };
 
-// --- Settings Logic ---
+// --- View Logic ---
 const applyAllSettingsToThree = () => {
   if (!controls) return;
   camera.fov = settings.fov_default;
   camera.updateProjectionMatrix();
   const azimuth = settings.initial_heading * (Math.PI / 180);
-  const polar = (90 - settings.initial_pitch) * (Math.PI / 180); // 90-UI = Three Polar
+  const polar = (settings.initial_pitch + 90) * (Math.PI / 180);
   const r = 0.1;
   camera.position.x = r * Math.sin(polar) * Math.sin(azimuth);
   camera.position.y = r * Math.cos(polar);
   camera.position.z = r * Math.sin(polar) * Math.cos(azimuth);
   controls.target.set(0,0,0);
-  applyLimits();
+  applyLimitsAndFOV();
   controls.update();
 };
 
-const applyLimits = () => {
-  if (!controls) return;
+const applyLimitsAndFOV = () => {
+  if(!controls || !camera) return;
+  camera.fov = settings.fov_default;
+  camera.updateProjectionMatrix();
+
   if (settings.limit_h_min <= -180 && settings.limit_h_max >= 180) {
     controls.minAzimuthAngle = -Infinity; controls.maxAzimuthAngle = Infinity;
   } else {
     controls.minAzimuthAngle = settings.limit_h_min * (Math.PI / 180);
     controls.maxAzimuthAngle = settings.limit_h_max * (Math.PI / 180);
   }
-  // Min(UI left) -> Bottom(Three Max)
   controls.maxPolarAngle = (90 - settings.limit_v_min) * (Math.PI / 180);
-  // Max(UI right) -> Top(Three Min)
   controls.minPolarAngle = (90 - settings.limit_v_max) * (Math.PI / 180);
   controls.update();
 };
 
-// --- Hotspots ---
+const onFovPreview = (val) => { camera.fov = val; camera.updateProjectionMatrix(); };
+const onHLimitPreview = (val) => { 
+  const rad = val * (Math.PI / 180); controls.minAzimuthAngle = -Infinity; controls.maxAzimuthAngle = Infinity;
+  const pl = controls.getPolarAngle(); const r = 0.1;
+  camera.position.x = r * Math.sin(pl) * Math.sin(rad); camera.position.z = r * Math.sin(pl) * Math.cos(rad); controls.update();
+};
+const onVLimitPreview = (val) => {
+  const rad = (90 - val) * (Math.PI / 180); controls.minPolarAngle = 0; controls.maxPolarAngle = Math.PI;
+  const az = controls.getAzimuthalAngle(); const r = 0.1;
+  camera.position.x = r * Math.sin(rad) * Math.sin(az); camera.position.y = r * Math.cos(rad); camera.position.z = r * Math.sin(rad) * Math.cos(az); controls.update();
+};
+
+const captureInitialState = () => {
+  const az = controls.getAzimuthalAngle(); const pl = controls.getPolarAngle();
+  settings.initial_heading = az * (180 / Math.PI);
+  settings.initial_pitch = (pl * (180 / Math.PI)) - 90;
+  settings.fov_default = camera.fov;
+};
+
+const captureCover = async () => {
+  renderer.render(scene, camera);
+  const dataUrl = renderer.domElement.toDataURL('image/jpeg', 0.7);
+  try {
+    const r1 = await fetch('http://127.0.0.1:8000/upload_base64/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({image_data:dataUrl})});
+    const d1 = await r1.json();
+    await fetch(`http://127.0.0.1:8000/scenes/${currentScene.value.id}`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cover_url:d1.url})});
+    alert("封面已更新"); fetchProject();
+  } catch(e){}
+};
+
+// --- Hotspot Logic ---
 const rebuildHotspotMeshes = () => {
   hotspotMeshes.forEach(mesh => scene.remove(mesh));
   hotspotMeshes = [];
@@ -360,9 +326,9 @@ const onViewportClick = (event) => {
   if (intersects.length > 0) {
     const hit = intersects[0].object;
     const hData = hotspotList.value.find(h => h.id === hit.userData.id) || hotspotList.value.find(h => h._mesh === hit);
-    if (hData) selectHotspot(hData);
+    if (hData) selectHotspotByList(hData);
   } else {
-    selectedHotspot.value = null; highlightHotspot(null);
+    cancelHotspotSelection();
   }
 };
 const onDoubleClick = (event) => {
@@ -387,16 +353,20 @@ const addNewHotspot = async (pos) => {
       const saved = await res.json();
       const hData = { id:saved.id, text:saved.text, target_scene_id:saved.target_scene_id, position:pos };
       const mesh = createHotspotMesh(pos); mesh.userData={id:saved.id}; scene.add(mesh); hotspotMeshes.push(mesh); hData._mesh=mesh;
-      hotspotList.value.push(hData); selectHotspot(hData);
+      hotspotList.value.push(hData); selectHotspotByList(hData);
     }
   } catch(e){alert("添加失败");}
 };
-const selectHotspot = (h) => { selectedHotspot.value = { ...h }; highlightHotspot(h._mesh); };
-const selectHotspotByList = (h) => selectHotspot(h);
-const highlightHotspot = (mesh) => { hotspotMeshes.forEach(m => m.material.color.set(0xff0000)); if(mesh) mesh.material.color.set(0x00ff00); };
-const saveSelectedHotspot = async () => {
-  if(!selectedHotspot.value) return;
-  const h = selectedHotspot.value;
+const selectHotspotByList = (h) => {
+  selectedHotspot.value = { ...h }; // 复制用于编辑
+  hotspotMeshes.forEach(m => m.material.color.set(0xff0000));
+  if(h._mesh) h._mesh.material.color.set(0x00ff00);
+};
+const cancelHotspotSelection = () => {
+  selectedHotspot.value = null;
+  hotspotMeshes.forEach(m => m.material.color.set(0xff0000));
+};
+const saveSelectedHotspot = async (h) => {
   try {
     const res = await fetch(`http://127.0.0.1:8000/hotspots/${h.id}`, {
       method: 'PUT', headers: {'Content-Type':'application/json'},
@@ -409,114 +379,87 @@ const saveSelectedHotspot = async () => {
     }
   } catch(e){alert("失败");}
 };
-const deleteSelectedHotspot = async () => {
-  if(!selectedHotspot.value || !confirm("删除热点?")) return;
-  const id = selectedHotspot.value.id;
+const deleteSelectedHotspot = async (h) => {
+  if(!confirm("删除?")) return;
   try {
-    await fetch(`http://127.0.0.1:8000/hotspots/${id}`, { method:'DELETE' });
-    const mesh = hotspotMeshes.find(m=>m.userData.id===id);
+    await fetch(`http://127.0.0.1:8000/hotspots/${h.id}`, { method:'DELETE' });
+    const mesh = hotspotMeshes.find(m=>m.userData.id===h.id);
     if(mesh) { scene.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose(); hotspotMeshes=hotspotMeshes.filter(m=>m!==mesh); }
-    hotspotList.value = hotspotList.value.filter(h=>h.id!==id);
+    hotspotList.value = hotspotList.value.filter(i=>i.id!==h.id);
     selectedHotspot.value = null;
   } catch(e){alert("失败");}
 };
 
-// --- 菜单与交互 ---
-// [修复] 右键菜单逻辑
-const onContextMenu = (e) => {
-  menuPos.value = { x: e.clientX, y: e.clientY };
-  menuVisible.value = true;
-};
-const closeMenu = () => menuVisible.value = false;
-
-// [修复] 切换拖拽方向
-const toggleDirection = () => {
-  isReverse.value = !isReverse.value;
-  const speed = 0.5;
-  controls.rotateSpeed = isReverse.value ? -speed : speed;
-};
-const resetView = () => applyAllSettingsToThree();
-
-const switchTab = (tab) => { activeTab.value = tab; selectedHotspot.value=null; highlightHotspot(null); };
+// --- Common ---
+const switchTab = (tab) => { activeTab.value = tab; cancelHotspotSelection(); };
 const switchScene = (id) => { if(isModified.value && !confirm("未保存将丢失"))return; loadScene(id); };
-const handleBack = () => { if(isModified.value && !confirm("有未保存修改，离开？"))return; emit('back'); };
-
-// ... 其他辅助函数 ...
-const captureInitialState = () => { 
-  const az=controls.getAzimuthalAngle(); const pl=controls.getPolarAngle();
-  settings.initial_heading=az*(180/Math.PI); settings.initial_pitch=90-(pl*(180/Math.PI)); settings.fov_default=camera.fov; 
-};
-const captureCover = async () => { renderer.render(scene,camera); const d=renderer.domElement.toDataURL('image/jpeg',0.7); try{ const r1=await fetch('http://127.0.0.1:8000/upload_base64/',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_data:d})}); const d1=await r1.json(); await fetch(`http://127.0.0.1:8000/scenes/${currentScene.value.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({cover_url:d1.url})}); alert("封面已更新"); fetchProject(); }catch(e){} };
 const saveAll = async () => { saving.value=true; try{ const p={...settings}; const r=await fetch(`http://127.0.0.1:8000/scenes/${currentScene.value.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}); if(r.ok){ originalSettingsJson.value=JSON.stringify(settings); } }catch(e){alert("Error");}finally{saving.value=false;} };
 const resetToDefaults = () => { if(!confirm("恢复?"))return; Object.assign(settings, DEFAULT_SETTINGS); applyAllSettingsToThree(); };
-const updateCameraFOV = () => { if(camera){ camera.fov=settings.fov_default; camera.updateProjectionMatrix(); } };
-const onFovRangeChange = () => { if(settings.fov_default<settings.fov_min)settings.fov_default=settings.fov_min; if(settings.fov_default>settings.fov_max)settings.fov_default=settings.fov_max; updateCameraFOV(); };
-const onFovPreview = ({value}) => { camera.fov=value; camera.updateProjectionMatrix(); };
-const onHLimitChange = () => applyLimits();
-const onHLimitPreview = ({value}) => { const rad=value*(Math.PI/180); controls.minAzimuthAngle=-Infinity; controls.maxAzimuthAngle=Infinity; const pl=controls.getPolarAngle(); const r=0.1; camera.position.x=r*Math.sin(pl)*Math.sin(rad); camera.position.z=r*Math.sin(pl)*Math.cos(rad); controls.update(); };
-const onVLimitChange = () => applyLimits();
-const onVLimitPreview = ({value}) => { const rad=(90-value)*(Math.PI/180); controls.minPolarAngle=0; controls.maxPolarAngle=Math.PI; const az=controls.getAzimuthalAngle(); const r=0.1; camera.position.x=r*Math.sin(rad)*Math.sin(az); camera.position.y=r*Math.cos(rad); camera.position.z=r*Math.sin(rad)*Math.cos(az); controls.update(); };
+const handleBack = () => { if(isModified.value && !confirm("有未保存修改，离开？"))return; emit('back'); };
+const onContextMenu = (e) => { e.preventDefault(); menuPos.value = {x:e.clientX, y:e.clientY}; menuVisible.value = true; };
+const toggleDirection = () => { isReverse.value = !isReverse.value; controls.rotateSpeed = isReverse.value ? -0.5 : 0.5; };
+const resetView = () => applyAllSettingsToThree();
 const onMouseWheel = (e) => { e.preventDefault(); let f=camera.fov+e.deltaY*0.05; f=Math.max(settings.fov_min, Math.min(settings.fov_max, f)); camera.fov=f; camera.updateProjectionMatrix(); };
 const animate = () => { animationId=requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); };
 const onResize = () => { if(containerRef.value){ camera.aspect=containerRef.value.clientWidth/containerRef.value.clientHeight; camera.updateProjectionMatrix(); renderer.setSize(containerRef.value.clientWidth,containerRef.value.clientHeight); } };
-
-// [修复] 浏览器关闭拦截
 const onBeforeUnload = (e) => { if (isModified.value) { e.preventDefault(); e.returnValue = ''; } };
 
 onMounted(() => { fetchProject(); window.addEventListener('beforeunload', onBeforeUnload); });
-onBeforeUnmount(() => { cancelAnimationFrame(animationId); window.removeEventListener('beforeunload', onBeforeUnload); window.removeEventListener('resize', onResize); window.removeEventListener('click', closeMenu); if(renderer) renderer.dispose(); });
+onBeforeUnmount(() => { cancelAnimationFrame(animationId); window.removeEventListener('beforeunload', onBeforeUnload); window.removeEventListener('resize', onResize); if(renderer) renderer.dispose(); });
 </script>
 
 <style scoped>
-/* 样式复用之前的，确保包含 .context-menu */
-.editor-layout { display: flex; height: 100vh; background: #1a1a1a; color: #ccc; user-select: none; }
-.left-toolbar { width: 50px; background: #222; border-right: 1px solid #333; display: flex; flex-direction: column; align-items: center; padding-top: 10px; }
-.tool-btn { width: 40px; height: 40px; margin-bottom: 10px; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; color: #888; font-size: 18px; transition: all 0.2s; }
-.tool-btn:hover { background: #333; color: #fff; }
-.tool-btn.active { background: #3498db; color: #fff; }
-.tool-label { font-size: 10px; margin-top: 2px; }
-.viewport { flex: 1; position: relative; background: #000; padding-bottom: 140px; }
+.editor-root { display: flex; flex-direction: column; height: 100vh; background: #1a1a1a; color: #ccc; }
+
+/* 1. Header (Fixed Height) */
+.top-header {
+  height: 50px; 
+  background: #2d2d2d; 
+  border-bottom: 1px solid #111;
+  display: flex; 
+  justify-content: space-between; /* 左右推开 */
+  align-items: center; 
+  padding: 0 20px; 
+  z-index: 50;
+  position: relative; /* [关键] 为绝对定位提供基准 */
+}
+.header-left { display: flex; align-items: center; gap: 15px; }
+.back-btn { background: none; border: none; color: #aaa; cursor: pointer; display: flex; align-items: center; gap: 5px; font-size: 13px; }
+.back-btn:hover { color: white; }
+.v-divider { width: 1px; height: 16px; background: #555; }
+.scene-title { font-weight: bold; color: white; font-size: 14px; }
+.modified-dot { color: #e74c3c; margin-left: 5px; }
+
+.header-right { display: flex; align-items: center; gap: 15px; }
+.btn-text { background: none; border: none; color: #888; cursor: pointer; font-size: 12px; }
+.btn-text:hover { color: #ccc; }
+.save-btn { background: #333; color: #888; border: 1px solid #444; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px; transition: all 0.3s; }
+.save-btn.has-changes { background: #e67e22; color: white; border-color: #d35400; box-shadow: 0 0 8px rgba(230,126,34,0.4); }
+.save-btn:hover { opacity: 0.9; }
+
+/* 2. Main Body (Flex Row) */
+.main-body { flex: 1; display: flex; overflow: hidden; position: relative; }
+
+/* Left Toolbar */
+.left-toolbar { width: 50px; background: #252526; border-right: 1px solid #111; display: flex; flex-direction: column; align-items: center; padding-top: 15px; }
+.tool-item { width: 40px; height: 40px; margin-bottom: 15px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; color: #888; border-radius: 6px; transition: all 0.2s; }
+.tool-item:hover { background: #333; color: white; }
+.tool-item.active { background: #3498db; color: white; }
+.tool-item .icon { font-size: 18px; margin-bottom: 2px; }
+.tool-item .label { font-size: 10px; }
+
+/* Viewport (Middle) */
+.viewport-area { flex: 1; position: relative; background: #000; overflow: hidden; }
 .three-container { width: 100%; height: 100%; }
-.viewport-header { position: absolute; top: 0; left: 0; right: 0; height: 50px; background: rgba(30,30,30,0.9); border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; z-index: 10; }
-.back-btn, .btn-text { background: none; border: none; color: #aaa; cursor: pointer; font-size: 13px; }
-.save-primary-btn { background: #333; color: #888; border: 1px solid #444; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px; transition: all 0.3s; }
-.save-primary-btn.has-changes { background: #e67e22; color: white; border-color: #d35400; }
-.scene-name { font-weight: bold; color: white; margin-right: 10px; }
-.modified-dot { color: #e74c3c; font-size: 20px; line-height: 1; }
 .center-cross { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: rgba(255,255,255,0.3); font-size: 20px; pointer-events: none; }
-.toast-tip { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.6); color: white; padding: 5px 15px; border-radius: 20px; font-size: 12px; pointer-events: none; }
-.sidebar { width: 340px; background: #252526; border-left: 1px solid #333; display: flex; flex-direction: column; }
-.panel-header { height: 50px; line-height: 50px; padding: 0 20px; font-weight: bold; background: #2d2d2d; border-bottom: 1px solid #333; color: #eee; }
-.panel-body { flex: 1; padding: 20px; overflow-y: auto; }
-.section-block { margin-bottom: 25px; }
-.section-block h3 { font-size: 13px; color: #3498db; margin: 0 0 8px 0; font-weight: bold; }
-.desc { font-size: 12px; color: #777; margin-bottom: 12px; }
-.action-grid { display: flex; gap: 10px; margin-bottom: 10px; }
-.action-btn { flex: 1; padding: 8px; border: 1px solid #444; background: #333; color: #ccc; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.action-btn.primary { border-color: #3498db; color: #3498db; background: rgba(52,152,219,0.15); }
-.data-display { display: flex; justify-content: space-between; background: #1e1e1e; padding: 6px 10px; border-radius: 4px; }
-.tag { font-size: 11px; color: #f1c40f; font-family: monospace; }
-.divider { border: 0; border-top: 1px solid #333; margin: 20px 0; }
-.control-row { margin-bottom: 20px; }
-.label-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.control-row label { font-size: 12px; color: #aaa; }
-.status-tag { font-size: 10px; background: #27ae60; color: white; padding: 1px 4px; border-radius: 2px; }
-.val-display { text-align: center; font-size: 11px; color: #f1c40f; margin-top: 5px; }
-input[type=range] { width: 100%; cursor: pointer; }
-.form-group { margin-bottom: 15px; }
-.form-group label { display: block; font-size: 12px; margin-bottom: 5px; color: #aaa; }
-.form-input, .form-select { width: 100%; padding: 8px; background: #333; border: 1px solid #444; color: white; border-radius: 4px; outline: none; }
-.form-input:focus { border-color: #3498db; }
-.btn-row { display: flex; gap: 10px; margin-top: 20px; }
-.btn-danger { flex: 1; padding: 8px; background: #c0392b; border: none; color: white; border-radius: 4px; cursor: pointer; }
-.btn-primary { flex: 1; padding: 8px; background: #3498db; border: none; color: white; border-radius: 4px; cursor: pointer; }
-.hotspot-list { margin-top: 20px; }
-.hotspot-list h4 { font-size: 12px; color: #888; margin-bottom: 10px; }
-.hotspot-item { display: flex; align-items: center; gap: 10px; padding: 8px; background: #333; border-radius: 4px; margin-bottom: 5px; cursor: pointer; }
-.hotspot-item:hover { background: #444; }
-.empty-tip { color: #888; font-size: 13px; line-height: 1.6; }
-.empty-tip ul { padding-left: 20px; }
-.context-menu { position: fixed; z-index: 9999; background: #333; border: 1px solid #444; border-radius: 4px; padding: 5px 0; min-width: 160px; }
+.toast-tip { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.6); padding: 5px 15px; border-radius: 20px; font-size: 12px; pointer-events: none; }
+
+/* Right Sidebar */
+.right-sidebar { width: 320px; background: #252526; border-left: 1px solid #111; display: flex; flex-direction: column; box-shadow: -5px 0 15px rgba(0,0,0,0.2); }
+.panel-header { height: 40px; line-height: 40px; padding: 0 15px; font-weight: bold; font-size: 13px; border-bottom: 1px solid #111; background: #2d2d2d; color: #ddd; }
+
+/* Context Menu */
+.context-menu { position: fixed; z-index: 9999; background: #333; border: 1px solid #444; border-radius: 4px; padding: 5px 0; min-width: 160px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
 .context-menu .item { padding: 8px 15px; font-size: 13px; color: #ddd; cursor: pointer; }
 .context-menu .item:hover { background: #444; }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
