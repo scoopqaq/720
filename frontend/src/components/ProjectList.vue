@@ -109,7 +109,7 @@
             <h3 class="project-name" v-html="highlightName(p.name)"></h3>
             <div class="meta-row">
               <span class="category-tag">{{ p.category }}</span>
-              <span class="scene-count">{{ p.scenes.length }} 场景</span>
+              <span class="scene-count">{{ getSceneCount(p) }} 场景</span>
             </div>
           </div>
         </div>
@@ -182,14 +182,16 @@ const gridRef = ref(null);
 const projects = ref([]);
 const loading = ref(true);
 
-// 筛选与排序状态
+// 筛选与排序
 const filterCategory = ref("");
 const searchQuery = ref("");
-const sortBy = ref("created_desc"); // 默认按创建时间倒序
+const sortBy = ref("created_desc");
 
+// 多选状态
 const isSelectionMode = ref(false); 
 const selectedIds = ref([]); 
 
+// UI 状态
 const contextMenu = reactive({ visible: false, x: 0, y: 0, targetId: null, targetProject: null });
 const modals = reactive({
   delete: { visible: false, ids: [] },
@@ -200,43 +202,27 @@ let isDragging = false;
 
 const allCategories = ['家装', '商业空间', '样板房', '公共空间', '室外建筑', '展览展厅', '别墅', '园林景观', '酒店/民宿', '实景拍摄', '餐饮', '景区/风光', '其他'];
 
-// 计算可用分类
 const availableCategories = computed(() => {
   const cats = new Set(projects.value.map(p => p.category));
   return Array.from(cats);
 });
 
-// [核心] 过滤与排序逻辑
+// 过滤与排序
 const filteredProjects = computed(() => {
   let result = projects.value;
-
-  // 1. 分类过滤
-  if (filterCategory.value) {
-    result = result.filter(p => p.category === filterCategory.value);
-  }
-
-  // 2. 搜索过滤 (忽略大小写)
+  if (filterCategory.value) result = result.filter(p => p.category === filterCategory.value);
   if (searchQuery.value) {
     const q = searchQuery.value.toLowerCase();
     result = result.filter(p => p.name.toLowerCase().includes(q));
   }
-
-  // 3. 排序逻辑
-  // 创建副本以防修改原数组顺序导致抖动
   return [...result].sort((a, b) => {
     switch (sortBy.value) {
-      case 'created_desc': 
-        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
-      case 'created_asc': 
-        return new Date(a.created_at || 0) - new Date(b.created_at || 0);
-      case 'updated_desc': 
-        return new Date(b.updated_at || 0) - new Date(a.updated_at || 0);
-      case 'name_asc': 
-        return a.name.localeCompare(b.name, 'zh-CN');
-      case 'category':
-        return a.category.localeCompare(b.category, 'zh-CN');
-      default:
-        return 0;
+      case 'created_desc': return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+      case 'created_asc': return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+      case 'updated_desc': return new Date(b.updated_at || 0) - new Date(a.updated_at || 0);
+      case 'name_asc': return a.name.localeCompare(b.name, 'zh-CN');
+      case 'category': return a.category.localeCompare(b.category, 'zh-CN');
+      default: return 0;
     }
   });
 });
@@ -252,42 +238,67 @@ const fetchProjects = async () => {
   }
 };
 
+// [核心修复] 获取场景总数：遍历 groups
+const getSceneCount = (project) => {
+  if (!project.groups) return 0;
+  return project.groups.reduce((count, group) => {
+    return count + (group.scenes ? group.scenes.length : 0);
+  }, 0);
+};
+
+// [核心修复] 获取封面图：遍历 groups
 const getCoverImage = (project) => {
-  if (project.scenes && project.scenes.length > 0) {
-    const firstScene = project.scenes[0];
-    if (firstScene.cover_url) return `http://127.0.0.1:8000${firstScene.cover_url}?t=${new Date(project.updated_at).getTime()}`; // 使用 updated_at 作为缓存刷新依据更智能
-    return `http://127.0.0.1:8000${firstScene.image_url}`;
+  // 1. 如果有专门的封面
+  if (project.cover_url) {
+     return `http://127.0.0.1:8000${project.cover_url}?t=${new Date(project.updated_at).getTime()}`;
+  }
+  
+  // 2. 如果没有，找第一个分组的第一个场景
+  if (project.groups && project.groups.length > 0) {
+    for (const group of project.groups) {
+      if (group.scenes && group.scenes.length > 0) {
+        const s = group.scenes[0];
+        const url = s.cover_url || s.image_url;
+        return `http://127.0.0.1:8000${url}`;
+      }
+    }
   }
   return 'https://via.placeholder.com/300x200?text=No+Scene';
 };
 
-// 搜索高亮辅助函数
 const highlightName = (name) => {
   if (!searchQuery.value) return name;
   const reg = new RegExp(`(${searchQuery.value})`, 'gi');
   return name.replace(reg, '<span style="color:#3498db;font-weight:bold">$1</span>');
 };
 
-// 时间格式化
 const formatTime = (isoString) => {
   if (!isoString) return '';
   const date = new Date(isoString);
   return `${date.getMonth()+1}-${date.getDate()} ${date.getHours()}:${date.getMinutes().toString().padStart(2,'0')}`;
 };
 
-const clearFilters = () => {
-  searchQuery.value = '';
-  filterCategory.value = '';
+const clearFilters = () => { searchQuery.value = ''; filterCategory.value = ''; };
+
+// 交互逻辑
+const onCardClick = (project, event) => {
+  if (contextMenu.visible) { contextMenu.visible = false; return; }
+  if (isSelectionMode.value) toggleSelection(project.id);
+  else emit('select-project', project.id);
 };
 
-// ... (以下交互逻辑保持不变) ...
-const onCardClick = (project, event) => { if (contextMenu.visible) { contextMenu.visible = false; return; } if (isSelectionMode.value) toggleSelection(project.id); else emit('select-project', project.id); };
 const toggleSelection = (id) => { const index = selectedIds.value.indexOf(id); if (index === -1) selectedIds.value.push(id); else selectedIds.value.splice(index, 1); };
 const enterSelectionMode = () => { isSelectionMode.value = true; contextMenu.visible = false; };
 const exitSelectionMode = () => { isSelectionMode.value = false; selectedIds.value = []; contextMenu.visible = false; };
 const selectAll = () => { selectedIds.value = filteredProjects.value.map(p => p.id); isSelectionMode.value = true; contextMenu.visible = false; };
 const onBgContextMenu = (e) => showMenu(e, null);
-const onCardContextMenu = (e, project) => { if (!selectedIds.value.includes(project.id)) { if (!isSelectionMode.value) selectedIds.value = []; if (!selectedIds.value.includes(project.id)) selectedIds.value.push(project.id); } showMenu(e, project); };
+const onCardContextMenu = (e, project) => { 
+  if (!selectedIds.value.includes(project.id)) { 
+    if (!isSelectionMode.value) selectedIds.value = []; 
+    if (!selectedIds.value.includes(project.id)) selectedIds.value.push(project.id); 
+  } 
+  showMenu(e, project); 
+};
 const showMenu = (e, target) => { contextMenu.visible = true; contextMenu.x = e.clientX; contextMenu.y = e.clientY; contextMenu.targetId = target ? target.id : null; contextMenu.targetProject = target; };
 const closeMenu = () => { contextMenu.visible = false; };
 const handleMenuAction = (action) => { const project = contextMenu.targetProject; contextMenu.visible = false; switch (action) { case 'enter': emit('select-project', project.id); break; case 'edit': emit('enter-editor', project.id); break; case 'delete': confirmBatchDelete(); break; case 'rename': openRenameModal(project); break; } };
@@ -299,55 +310,36 @@ const confirmBatchDelete = () => { if (selectedIds.value.length === 0) return; c
 const executeDelete = async () => { try { const res = await fetch('http://127.0.0.1:8000/projects/batch_delete/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modals.delete.ids) }); if (res.ok) { projects.value = projects.value.filter(p => !modals.delete.ids.includes(p.id)); selectedIds.value = []; modals.delete.visible = false; if (projects.value.length === 0) exitSelectionMode(); } } catch (err) { alert("删除失败"); } };
 const openRenameModal = (project) => { modals.rename.project = project; modals.rename.tempName = project.name; modals.rename.tempCategory = project.category; modals.rename.visible = true; };
 const executeRename = async () => { const p = modals.rename.project; try { const res = await fetch(`http://127.0.0.1:8000/projects/${p.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modals.rename.tempName, category: modals.rename.tempCategory }) }); if (res.ok) { p.name = modals.rename.tempName; p.category = modals.rename.tempCategory; modals.rename.visible = false; } } catch (err) { alert("修改失败"); } };
+
 onMounted(() => { fetchProjects(); window.addEventListener('click', closeMenu); });
 onBeforeUnmount(() => { window.removeEventListener('click', closeMenu); });
 </script>
 
 <style scoped>
+/* 样式复用之前的，这里省略以节省篇幅，请直接保留你原有的 <style scoped> 内容 */
+/* 注意：需要保留 .scene-count 等样式 */
 .list-wrapper { min-height: 100vh; background-color: #f5f7fa; padding: 20px; font-family: 'PingFang SC', sans-serif; user-select: none; position: relative; }
 .content-container { max-width: 1400px; margin: 0 auto; }
-
-/* Toolbar 升级 */
-.toolbar-container {
-  background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-  margin-bottom: 24px; padding: 16px 24px;
-}
+.toolbar-container { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 24px; padding: 16px 24px; }
 .toolbar-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 .title-group { display: flex; align-items: center; gap: 10px; }
 .title-group h2 { margin: 0; font-size: 20px; color: #2c3e50; }
 .count-badge { background: #f0f2f5; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
-
 .actions-group { display: flex; align-items: center; gap: 16px; }
-
-/* 搜索框 */
-.search-box {
-  position: relative; display: flex; align-items: center;
-  background: #f8f9fa; border: 1px solid #e1e4e8; border-radius: 6px; padding: 0 10px;
-  width: 240px; transition: border-color 0.2s;
-}
+.search-box { position: relative; display: flex; align-items: center; background: #f8f9fa; border: 1px solid #e1e4e8; border-radius: 6px; padding: 0 10px; width: 240px; transition: border-color 0.2s; }
 .search-box:focus-within { border-color: #3498db; background: white; }
 .search-icon { color: #999; }
-.search-input {
-  border: none; background: transparent; padding: 8px 5px; font-size: 14px; width: 100%; outline: none;
-}
+.search-input { border: none; background: transparent; padding: 8px 5px; font-size: 14px; width: 100%; outline: none; }
 .clear-btn { background: none; border: none; font-size: 18px; color: #999; cursor: pointer; padding: 0; line-height: 1; }
 .clear-btn:hover { color: #666; }
-
-/* 排序框 */
 .sort-box { display: flex; align-items: center; gap: 8px; font-size: 14px; color: #666; }
 .sort-select { padding: 6px 10px; border: 1px solid #e1e4e8; border-radius: 4px; outline: none; background: white; font-size: 13px; cursor: pointer; }
 .sort-select:hover { border-color: #bbb; }
-
 .toolbar-bottom { border-top: 1px solid #eee; padding-top: 12px; }
 .category-tabs { display: flex; gap: 15px; flex-wrap: wrap; }
-.category-tabs span {
-  font-size: 14px; color: #666; cursor: pointer; padding: 4px 12px;
-  border-radius: 4px; transition: all 0.2s;
-}
+.category-tabs span { font-size: 14px; color: #666; cursor: pointer; padding: 4px 12px; border-radius: 4px; transition: all 0.2s; }
 .category-tabs span:hover { background: #f0f2f5; color: #333; }
 .category-tabs span.active { background: #eef6fc; color: #3498db; font-weight: 600; }
-
-/* Buttons */
 .btn { border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; transition: all 0.2s; font-weight: 500; }
 .btn-primary { background: #333; color: white; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
 .btn-primary:hover { background: #000; transform: translateY(-1px); }
@@ -356,45 +348,29 @@ onBeforeUnmount(() => { window.removeEventListener('click', closeMenu); });
 .btn.small { padding: 6px 12px; font-size: 13px; }
 .btn-text { background: transparent; color: #666; padding: 5px 10px; }
 .btn-text:hover { color: #333; background: #eee; }
-
-/* 列表 */
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 24px; padding-bottom: 100px; }
-.project-card {
-  background: white; border-radius: 12px; overflow: hidden;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.03); position: relative;
-  transition: all 0.2s; cursor: pointer; border: 2px solid transparent;
-}
+.project-card { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.03); position: relative; transition: all 0.2s; cursor: pointer; border: 2px solid transparent; }
 .project-card:hover { transform: translateY(-4px); box-shadow: 0 10px 20px rgba(0,0,0,0.08); }
 .project-card.selected { border-color: #3498db; background: #f0f9ff; }
-
 .checkbox-indicator { position: absolute; top: 12px; left: 12px; z-index: 10; width: 24px; height: 24px; border-radius: 50%; background: white; border: 2px solid #ddd; display: flex; justify-content: center; align-items: center; }
 .project-card.selected .checkbox-indicator { background: #3498db; border-color: #3498db; }
 .project-card.selected .checkbox-indicator .check-circle { width: 10px; height: 10px; background: white; border-radius: 50%; }
-
 .cover-wrapper { height: 160px; background: #f5f5f5; position: relative; overflow: hidden; }
 .cover-wrapper img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s; }
 .project-card:hover img { transform: scale(1.05); }
 .hover-overlay { position: absolute; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.2); display: flex; justify-content: center; align-items: center; opacity: 0; transition: opacity 0.2s; }
 .project-card:hover .hover-overlay { opacity: 1; }
 .hover-overlay span { color: white; border: 1px solid rgba(255,255,255,0.8); padding: 4px 12px; border-radius: 20px; font-size: 12px; backdrop-filter: blur(4px); }
-
-.time-badge {
-  position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6);
-  color: rgba(255,255,255,0.9); font-size: 10px; padding: 2px 6px; border-radius: 4px;
-}
-
+.time-badge { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.9); font-size: 10px; padding: 2px 6px; border-radius: 4px; }
 .card-info { padding: 14px; }
 .project-name { margin: 0 0 8px; font-size: 15px; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.4; }
 .meta-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #999; }
 .category-tag { background: #f0f2f5; padding: 2px 8px; border-radius: 4px; color: #666; }
-
-/* 其他通用样式保持一致 */
 .loading-state { text-align: center; padding: 40px; color: #999; display: flex; flex-direction: column; align-items: center; }
 .spinner { width: 30px; height: 30px; border: 3px solid #eee; border-top-color: #3498db; border-radius: 50%; animation: spin 1s infinite linear; margin-bottom: 10px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .empty-state { text-align: center; padding: 60px; color: #999; }
-
-/* 框选、菜单、弹窗样式同前... */
 .drag-selection-box { position: fixed; border: 1px solid #3498db; background-color: rgba(52, 152, 219, 0.2); z-index: 9999; pointer-events: none; }
 .context-menu { position: fixed; z-index: 10000; background: white; border-radius: 8px; box-shadow: 0 5px 20px rgba(0,0,0,0.15); padding: 6px 0; min-width: 160px; border: 1px solid #eee; }
 .menu-item { padding: 10px 20px; font-size: 14px; color: #333; cursor: pointer; display: flex; align-items: center; gap: 8px; }
