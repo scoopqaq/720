@@ -47,6 +47,8 @@ class Scene(Base):
     limit_v_min = Column(Float, default=-90.0)
     limit_v_max = Column(Float, default=90.0)
     
+    sort_order = Column(Integer, default=0, index=True)
+    
     group = relationship("SceneGroup", back_populates="scenes")
     hotspots = relationship("Hotspot", back_populates="source_scene", foreign_keys="Hotspot.source_scene_id", cascade="all, delete-orphan")
 

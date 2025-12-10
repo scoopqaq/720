@@ -44,7 +44,33 @@ def read_project(project_id: int, db: Session = Depends(get_db)):
     db_project = db.query(models.Project).filter(models.Project.id == project_id).first()
     if db_project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    
+    # [新增] 手动对每个分组下的场景按 sort_order 排序
+    for group in db_project.groups:
+        group.scenes.sort(key=lambda s: s.sort_order)
+        
     return db_project
+
+@app.post("/groups/{group_id}/reorder_scenes")
+def reorder_scenes(group_id: int, scene_ids: List[int], db: Session = Depends(get_db)):
+    # scene_ids 是一个整数数组，代表了用户拖拽后的新顺序 [5, 2, 8, 1...]
+    
+    # 查出该组所有场景
+    scenes = db.query(models.Scene).filter(models.Scene.group_id == group_id).all()
+    scene_map = {s.id: s for s in scenes}
+    
+    # 遍历前端传来的 ID 列表，更新 sort_order
+    for index, s_id in enumerate(scene_ids):
+        if s_id in scene_map:
+            scene_map[s_id].sort_order = index
+            
+    # 更新项目修改时间
+    group = db.query(models.SceneGroup).filter(models.SceneGroup.id == group_id).first()
+    if group and group.project:
+        group.project.updated_at = datetime.now()
+
+    db.commit()
+    return {"ok": True}
 
 @app.post("/projects/create_full/", response_model=schemas.Project)
 def create_project_full(
