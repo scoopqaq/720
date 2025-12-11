@@ -7,7 +7,6 @@
     <div class="content-container">
       
       <div class="toolbar-container">
-        
         <div class="toolbar-top">
           <div class="title-group">
             <h2>作品库</h2>
@@ -16,16 +15,8 @@
           
           <div class="actions-group">
             <div class="search-box">
-              <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              </svg>
-              <input 
-                v-model="searchQuery" 
-                type="text" 
-                placeholder="搜索作品名称..." 
-                class="search-input"
-              >
+              <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <input v-model="searchQuery" type="text" placeholder="搜索作品名称..." class="search-input">
               <button v-if="searchQuery" class="clear-btn" @click="searchQuery = ''">×</button>
             </div>
 
@@ -48,33 +39,19 @@
               </div>
             </transition>
 
-            <button v-if="!isSelectionMode" class="btn btn-primary" @click="$emit('go-upload')">
-              + 新建
-            </button>
+            <button v-if="!isSelectionMode" class="btn btn-primary" @click="$emit('go-upload')">+ 新建</button>
           </div>
         </div>
 
         <div class="toolbar-bottom">
           <div class="category-tabs">
-             <span 
-              :class="{active: filterCategory === ''}" 
-              @click="filterCategory = ''"
-            >全部</span>
-            <span 
-              v-for="cat in availableCategories" 
-              :key="cat"
-              :class="{active: filterCategory === cat}"
-              @click="filterCategory = cat"
-            >
-              {{ cat }}
-            </span>
+             <span :class="{active: filterCategory === ''}" @click="filterCategory = ''">全部</span>
+            <span v-for="cat in availableCategories" :key="cat" :class="{active: filterCategory === cat}" @click="filterCategory = cat">{{ cat }}</span>
           </div>
         </div>
       </div>
 
-      <div v-if="loading" class="loading-state">
-        <div class="spinner"></div> 加载中...
-      </div>
+      <div v-if="loading" class="loading-state"><div class="spinner"></div> 加载中...</div>
       
       <div v-else-if="filteredProjects.length === 0" class="empty-state">
         <p>🔍 没有找到匹配的作品</p>
@@ -100,9 +77,7 @@
             <div class="hover-overlay" v-if="!isSelectionMode">
               <span>进入</span>
             </div>
-            <div class="time-badge" v-if="p.updated_at">
-              {{ formatTime(p.updated_at) }}
-            </div>
+            <div class="time-badge" v-if="p.updated_at">{{ formatTime(p.updated_at) }}</div>
           </div>
           
           <div class="card-info">
@@ -176,22 +151,20 @@
 
 <script setup>
 import { ref, computed, reactive, onMounted, onBeforeUnmount } from 'vue';
+import { authFetch, getImageUrl } from '../utils/api'; // [核心修正]
 
 const emit = defineEmits(['select-project', 'go-upload', 'enter-editor']);
 const gridRef = ref(null);
 const projects = ref([]);
 const loading = ref(true);
 
-// 筛选与排序
 const filterCategory = ref("");
 const searchQuery = ref("");
 const sortBy = ref("created_desc");
 
-// 多选状态
 const isSelectionMode = ref(false); 
 const selectedIds = ref([]); 
 
-// UI 状态
 const contextMenu = reactive({ visible: false, x: 0, y: 0, targetId: null, targetProject: null });
 const modals = reactive({
   delete: { visible: false, ids: [] },
@@ -207,7 +180,6 @@ const availableCategories = computed(() => {
   return Array.from(cats);
 });
 
-// 过滤与排序
 const filteredProjects = computed(() => {
   let result = projects.value;
   if (filterCategory.value) result = result.filter(p => p.category === filterCategory.value);
@@ -230,36 +202,32 @@ const filteredProjects = computed(() => {
 const fetchProjects = async () => {
   loading.value = true;
   try {
-    const res = await fetch('http://127.0.0.1:8000/projects/');
+    const res = await authFetch('/projects/'); // [修正] 使用 authFetch
     if (res.ok) projects.value = await res.json();
+  } catch (e) {
+    console.error(e);
   } finally {
     loading.value = false;
     contextMenu.visible = false; 
   }
 };
 
-// [核心修复] 获取场景总数：遍历 groups
 const getSceneCount = (project) => {
   if (!project.groups) return 0;
-  return project.groups.reduce((count, group) => {
-    return count + (group.scenes ? group.scenes.length : 0);
-  }, 0);
+  return project.groups.reduce((count, group) => count + (group.scenes ? group.scenes.length : 0), 0);
 };
 
-// [核心修复] 获取封面图：遍历 groups
 const getCoverImage = (project) => {
-  // 1. 如果有专门的封面
   if (project.cover_url) {
-     return `http://127.0.0.1:8000${project.cover_url}?t=${new Date(project.updated_at).getTime()}`;
+     return getImageUrl(`${project.cover_url}?t=${new Date(project.updated_at).getTime()}`);
   }
   
-  // 2. 如果没有，找第一个分组的第一个场景
   if (project.groups && project.groups.length > 0) {
     for (const group of project.groups) {
       if (group.scenes && group.scenes.length > 0) {
         const s = group.scenes[0];
         const url = s.cover_url || s.image_url;
-        return `http://127.0.0.1:8000${url}`;
+        return getImageUrl(url);
       }
     }
   }
@@ -280,7 +248,6 @@ const formatTime = (isoString) => {
 
 const clearFilters = () => { searchQuery.value = ''; filterCategory.value = ''; };
 
-// 交互逻辑
 const onCardClick = (project, event) => {
   if (contextMenu.visible) { contextMenu.visible = false; return; }
   if (isSelectionMode.value) toggleSelection(project.id);
@@ -292,13 +259,7 @@ const enterSelectionMode = () => { isSelectionMode.value = true; contextMenu.vis
 const exitSelectionMode = () => { isSelectionMode.value = false; selectedIds.value = []; contextMenu.visible = false; };
 const selectAll = () => { selectedIds.value = filteredProjects.value.map(p => p.id); isSelectionMode.value = true; contextMenu.visible = false; };
 const onBgContextMenu = (e) => showMenu(e, null);
-const onCardContextMenu = (e, project) => { 
-  if (!selectedIds.value.includes(project.id)) { 
-    if (!isSelectionMode.value) selectedIds.value = []; 
-    if (!selectedIds.value.includes(project.id)) selectedIds.value.push(project.id); 
-  } 
-  showMenu(e, project); 
-};
+const onCardContextMenu = (e, project) => { if (!selectedIds.value.includes(project.id)) { if (!isSelectionMode.value) selectedIds.value = []; if (!selectedIds.value.includes(project.id)) selectedIds.value.push(project.id); } showMenu(e, project); };
 const showMenu = (e, target) => { contextMenu.visible = true; contextMenu.x = e.clientX; contextMenu.y = e.clientY; contextMenu.targetId = target ? target.id : null; contextMenu.targetProject = target; };
 const closeMenu = () => { contextMenu.visible = false; };
 const handleMenuAction = (action) => { const project = contextMenu.targetProject; contextMenu.visible = false; switch (action) { case 'enter': emit('select-project', project.id); break; case 'edit': emit('enter-editor', project.id); break; case 'delete': confirmBatchDelete(); break; case 'rename': openRenameModal(project); break; } };
@@ -307,17 +268,30 @@ const onMouseMove = (e) => { if (!isDragging) return; const cx = e.clientX; cons
 const checkSelectionIntersection = () => { if (!gridRef.value) return; const cards = gridRef.value.querySelectorAll('.project-card'); const sRect = { left: dragBox.left, top: dragBox.top, right: dragBox.left + dragBox.width, bottom: dragBox.top + dragBox.height }; cards.forEach(card => { const rect = card.getBoundingClientRect(); const intersect = !(rect.right < sRect.left || rect.left > sRect.right || rect.bottom < sRect.top || rect.top > sRect.bottom); const id = parseInt(card.getAttribute('data-id')); if (intersect) { if (!selectedIds.value.includes(id)) selectedIds.value.push(id); } }); };
 const onMouseUp = () => { isDragging = false; dragBox.visible = false; window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
 const confirmBatchDelete = () => { if (selectedIds.value.length === 0) return; contextMenu.visible = false; modals.delete.ids = [...selectedIds.value]; modals.delete.visible = true; };
-const executeDelete = async () => { try { const res = await fetch('http://127.0.0.1:8000/projects/batch_delete/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modals.delete.ids) }); if (res.ok) { projects.value = projects.value.filter(p => !modals.delete.ids.includes(p.id)); selectedIds.value = []; modals.delete.visible = false; if (projects.value.length === 0) exitSelectionMode(); } } catch (err) { alert("删除失败"); } };
+
+// [修正] authFetch
+const executeDelete = async () => { 
+  try { 
+    const res = await authFetch('/projects/batch_delete/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modals.delete.ids) }); 
+    if (res.ok) { projects.value = projects.value.filter(p => !modals.delete.ids.includes(p.id)); selectedIds.value = []; modals.delete.visible = false; if (projects.value.length === 0) exitSelectionMode(); } 
+  } catch (err) { alert("删除失败"); } 
+};
 const openRenameModal = (project) => { modals.rename.project = project; modals.rename.tempName = project.name; modals.rename.tempCategory = project.category; modals.rename.visible = true; };
-const executeRename = async () => { const p = modals.rename.project; try { const res = await fetch(`http://127.0.0.1:8000/projects/${p.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modals.rename.tempName, category: modals.rename.tempCategory }) }); if (res.ok) { p.name = modals.rename.tempName; p.category = modals.rename.tempCategory; modals.rename.visible = false; } } catch (err) { alert("修改失败"); } };
+// [修正] authFetch
+const executeRename = async () => { 
+  const p = modals.rename.project; 
+  try { 
+    const res = await authFetch(`/projects/${p.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modals.rename.tempName, category: modals.rename.tempCategory }) }); 
+    if (res.ok) { p.name = modals.rename.tempName; p.category = modals.rename.tempCategory; modals.rename.visible = false; } 
+  } catch (err) { alert("修改失败"); } 
+};
 
 onMounted(() => { fetchProjects(); window.addEventListener('click', closeMenu); });
 onBeforeUnmount(() => { window.removeEventListener('click', closeMenu); });
 </script>
 
 <style scoped>
-/* 样式复用之前的，这里省略以节省篇幅，请直接保留你原有的 <style scoped> 内容 */
-/* 注意：需要保留 .scene-count 等样式 */
+/* 保持样式不变 */
 .list-wrapper { min-height: 100vh; background-color: #f5f7fa; padding: 20px; font-family: 'PingFang SC', sans-serif; user-select: none; position: relative; }
 .content-container { max-width: 1400px; margin: 0 auto; }
 .toolbar-container { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 24px; padding: 16px 24px; }
@@ -385,7 +359,7 @@ onBeforeUnmount(() => { window.removeEventListener('click', closeMenu); });
 .form-group { margin-bottom: 15px; }
 .form-group label { display: block; font-size: 14px; font-weight: bold; margin-bottom: 8px; color: #555; }
 .form-input, .form-select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none; }
-.form-input:focus, .form-select:focus { border-color: #3498db; }
+.form-input:focus { border-color: #3498db; }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 .fade-fast-enter-active, .fade-fast-leave-active { transition: opacity 0.1s; }

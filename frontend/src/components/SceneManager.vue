@@ -84,7 +84,8 @@
 
 <script setup>
 import { ref, computed, reactive, onMounted, onBeforeUnmount, watch } from 'vue';
-import draggable from 'vuedraggable'; // [新增] 引入拖拽库
+import draggable from 'vuedraggable';
+import { authFetch, getImageUrl } from '../utils/api'; // [核心修正]
 
 const props = defineProps({
   projectData: { type: Object, required: true },
@@ -95,7 +96,6 @@ const emit = defineEmits(['change-scene', 'refresh-data']);
 
 const currentGroupId = ref(null);
 const fileInput = ref(null);
-// [新增] 本地场景列表，用于双向绑定拖拽
 const localScenes = ref([]);
 
 const contextMenu = reactive({ visible: false, x: 0, y: 0, type: null, target: null });
@@ -103,23 +103,13 @@ const modalState = reactive({ visible: false, type: 'confirm', title: '', messag
 
 const groups = computed(() => props.projectData.groups || []);
 
-// [修改] 监听分组变化，同步更新本地列表
 const syncLocalScenes = () => {
   const group = groups.value.find(g => g.id === currentGroupId.value);
-  // 使用浅拷贝，防止直接修改 props 报错，但对象引用保持一致
   localScenes.value = group ? [...group.scenes] : [];
 };
 
-// 监听 currentGroupId 变化
-watch(currentGroupId, () => {
-  syncLocalScenes();
-});
-
-// 监听 props.projectData 变化 (比如上传后刷新)
-watch(() => props.projectData, () => {
-  syncLocalScenes();
-}, { deep: true });
-
+watch(currentGroupId, () => syncLocalScenes());
+watch(() => props.projectData, () => syncLocalScenes(), { deep: true });
 
 const initSelection = () => {
   if (groups.value.length === 0) return;
@@ -127,13 +117,12 @@ const initSelection = () => {
     const foundGroup = groups.value.find(g => g.scenes.some(s => s.id === props.currentSceneId));
     if (foundGroup) {
       currentGroupId.value = foundGroup.id;
-      return; // watch 会触发 sync
+      return; 
     }
   }
   if (!currentGroupId.value || !groups.value.find(g => g.id === currentGroupId.value)) {
     currentGroupId.value = groups.value[0].id;
   }
-  // 手动同步一次，确保初始状态正确
   syncLocalScenes();
 };
 
@@ -141,33 +130,29 @@ const switchGroup = (id) => { currentGroupId.value = id; };
 
 const getThumb = (scene) => {
   const url = scene.cover_url || scene.image_url;
-  return `http://127.0.0.1:8000${url}?t=${new Date().getTime()}`;
+  return getImageUrl(`${url}?t=${new Date().getTime()}`);
 };
 
-// [新增] 拖拽结束回调
 const onDragEnd = async () => {
-  // 提取新的 ID 顺序
   const newOrderIds = localScenes.value.map(s => s.id);
-  
   try {
-    await fetch(`http://127.0.0.1:8000/groups/${currentGroupId.value}/reorder_scenes`, {
+    await authFetch(`/groups/${currentGroupId.value}/reorder_scenes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newOrderIds)
     });
-    // 不需要 emit refresh，因为本地已经是最新的了，后端静默更新即可
-    console.log("顺序保存成功");
   } catch (e) {
-    console.error("排序保存失败", e);
-    emit('refresh-data'); // 失败了就刷新回原样
+    console.error(e);
+    emit('refresh-data');
   }
 };
 
-// ... (以下代码保持原样: 右键菜单、弹窗、增删改逻辑) ...
 const onContextMenu = (e, type, target) => { contextMenu.visible = true; contextMenu.x = e.clientX; contextMenu.y = e.clientY - 80; contextMenu.type = type; contextMenu.target = target; };
 const closeMenu = () => contextMenu.visible = false;
-const addNewGroup = async () => { const name = prompt("新分组名称", "新区域"); if (!name) return; try { const res = await fetch('http://127.0.0.1:8000/groups/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, project_id: props.projectData.id }) }); if (res.ok) emit('refresh-data'); } catch (e) { alert("添加失败"); } };
-const handleRenameGroup = async () => { const group = contextMenu.target; closeMenu(); const newName = prompt("重命名", group.name); if (!newName || newName === group.name) return; await fetch(`http://127.0.0.1:8000/groups/${group.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newName }) }); emit('refresh-data'); };
+
+// [修正] authFetch
+const addNewGroup = async () => { const name = prompt("新分组名称", "新区域"); if (!name) return; try { const res = await authFetch('/groups/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, project_id: props.projectData.id }) }); if (res.ok) emit('refresh-data'); } catch (e) { alert("添加失败"); } };
+const handleRenameGroup = async () => { const group = contextMenu.target; closeMenu(); const newName = prompt("重命名", group.name); if (!newName || newName === group.name) return; await authFetch(`/groups/${group.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newName }) }); emit('refresh-data'); };
 const handleDeleteGroupClick = () => {
   const g = contextMenu.target; closeMenu();
   if (groups.value.length <= 1) { showModal('alert', '无法删除', '项目必须至少保留一个分组。'); return; }
@@ -176,14 +161,18 @@ const handleDeleteGroupClick = () => {
   if (g.scenes.length > 0) showModal('confirm', '删除确认', `分组“${g.name}”含 ${g.scenes.length} 个场景，确定删除？`, () => executeDeleteGroup(g.id));
   else executeDeleteGroup(g.id);
 };
-const executeDeleteGroup = async (id) => { closeModal(); await fetch(`http://127.0.0.1:8000/groups/${id}`, { method: 'DELETE' }); emit('refresh-data'); };
-const handleRenameScene = async () => { const s = contextMenu.target; closeMenu(); const name = prompt("重命名", s.name); if (!name || name === s.name) return; await fetch(`http://127.0.0.1:8000/scenes/${s.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }); emit('refresh-data'); };
+const executeDeleteGroup = async (id) => { closeModal(); await authFetch(`/groups/${id}`, { method: 'DELETE' }); emit('refresh-data'); };
+const handleRenameScene = async () => { const s = contextMenu.target; closeMenu(); const name = prompt("重命名", s.name); if (!name || name === s.name) return; await authFetch(`/scenes/${s.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }); emit('refresh-data'); };
 const handleDeleteSceneClick = () => { const s = contextMenu.target; closeMenu(); const total = groups.value.reduce((t, g) => t + (g.scenes ? g.scenes.length : 0), 0); if (total <= 1) { showModal('alert', '无法删除', '必须保留一张场景。'); return; } showModal('confirm', '删除场景', `确定删除“${s.name}”？`, () => executeDeleteScene(s.id)); };
-const executeDeleteScene = async (id) => { closeModal(); await fetch(`http://127.0.0.1:8000/scenes/${id}`, { method: 'DELETE' }); emit('refresh-data'); };
+const executeDeleteScene = async (id) => { closeModal(); await authFetch(`/scenes/${id}`, { method: 'DELETE' }); emit('refresh-data'); };
 const showModal = (t, ti, m, c) => { modalState.type = t; modalState.title = ti; modalState.message = m; modalState.confirmCallback = c; modalState.visible = true; };
 const closeModal = () => { modalState.visible = false; };
 const triggerUpload = () => { fileInput.value.click(); };
-const handleUpload = async (e) => { const files = e.target.files; if (!files || files.length === 0) return; const fd = new FormData(); fd.append('files', files[0]); try { const res = await fetch(`http://127.0.0.1:8000/groups/${currentGroupId.value}/upload_scene`, { method: 'POST', body: fd }); if (res.ok) emit('refresh-data'); } catch (e) { alert("上传失败"); } finally { e.target.value = ''; } };
+const handleUpload = async (e) => { 
+  const files = e.target.files; if (!files || files.length === 0) return; 
+  const fd = new FormData(); fd.append('files', files[0]); 
+  try { const res = await authFetch(`/groups/${currentGroupId.value}/upload_scene`, { method: 'POST', body: fd }); if (res.ok) emit('refresh-data'); } catch (e) { alert("上传失败"); } finally { e.target.value = ''; } 
+};
 
 onMounted(() => { window.addEventListener('click', closeMenu); setTimeout(initSelection, 500); });
 onBeforeUnmount(() => window.removeEventListener('click', closeMenu));
@@ -191,6 +180,7 @@ defineExpose({ initSelection });
 </script>
 
 <style scoped>
+/* 保持原有样式不变 */
 .scene-manager { position: absolute; bottom: 0; left: 0; width: 100%; height: 140px; background: rgba(30,30,30,0.95); border-top: 1px solid #444; display: flex; flex-direction: column; z-index: 50; user-select: none; }
 .groups-bar { height: 36px; background: #252525; display: flex; align-items: center; padding: 0 10px; border-bottom: 1px solid #333; }
 .group-tab { padding: 0 15px; height: 36px; line-height: 36px; font-size: 13px; color: #aaa; cursor: pointer; border-right: 1px solid #333; transition: all 0.2s; }
@@ -198,28 +188,20 @@ defineExpose({ initSelection });
 .group-tab.active { background: #333; color: #3498db; font-weight: bold; border-top: 2px solid #3498db; }
 .add-group-btn { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #666; cursor: pointer; }
 .add-group-btn:hover { color: #fff; background: #444; }
-
-/* 拖拽区域样式调整 */
 .scenes-list { flex: 1; overflow-x: auto; overflow-y: hidden; padding: 10px; }
-/* 将 draggable 组件设为 flex 容器 */
 .scenes-scroll-area { display: flex; gap: 10px; height: 100%; }
-
-/* 拖拽时的占位样式 */
 .ghost-card { opacity: 0.5; border: 2px dashed #3498db; }
-
 .scene-card { width: 120px; height: 100%; background: #222; border-radius: 4px; overflow: hidden; position: relative; cursor: grab; border: 2px solid transparent; flex-shrink: 0; }
-.scene-card:active { cursor: grabbing; } /* 拖动时鼠标样式 */
+.scene-card:active { cursor: grabbing; }
 .scene-card img { width: 100%; height: 100%; object-fit: cover; opacity: 0.7; transition: opacity 0.2s; }
 .scene-card:hover img { opacity: 1; }
 .scene-card.active { border-color: #3498db; }
 .scene-card.active img { opacity: 1; }
 .scene-name { position: absolute; bottom: 0; left: 0; width: 100%; background: rgba(0,0,0,0.6); color: white; font-size: 12px; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
-
 .add-scene-card { width: 80px; height: 100%; border: 1px dashed #555; border-radius: 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; color: #777; flex-shrink: 0; }
 .add-scene-card:hover { border-color: #777; color: #ccc; }
 .add-scene-card .icon { font-size: 24px; margin-bottom: 5px; }
 .add-scene-card .text { font-size: 12px; }
-
 .context-menu { position: fixed; z-index: 9999; background: #333; border: 1px solid #444; border-radius: 4px; padding: 5px 0; min-width: 120px; }
 .context-menu .item { padding: 8px 15px; font-size: 13px; color: #ddd; cursor: pointer; }
 .context-menu .item:hover { background: #444; }

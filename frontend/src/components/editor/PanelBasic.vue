@@ -14,7 +14,6 @@
         </div>
       </div>
   
-      <hr class="divider">
   
       <div class="section-block">
         <h3>2. 缩放范围 (FOV)</h3>
@@ -33,7 +32,6 @@
         </div>
       </div>
   
-      <hr class="divider">
   
       <div class="section-block">
         <h3>3. 视角旋转限制</h3>
@@ -110,7 +108,6 @@
   .action-btn.primary { border-color: #3498db; color: #3498db; background: rgba(52,152,219,0.15); }
   .data-display { display: flex; justify-content: space-between; background: #1e1e1e; padding: 6px 10px; border-radius: 4px; }
   .tag { font-size: 11px; color: #f1c40f; font-family: monospace; }
-  .divider { border: 0; border-top: 1px solid #333; margin: 20px 0; }
   .control-row { margin-bottom: 20px; }
   .label-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .control-row label { font-size: 12px; color: #aaa; margin-bottom: 5px; display: block;}

@@ -2,34 +2,66 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 
-# 在 schemas.py 任意位置添加
-class ImageBase64(BaseModel):
-    image_data: str
-# --- Hotspot 模型 (补全这里) ---
+# --- Auth ---
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    username: str
+
+# --- Icons ---
+class HotspotIconBase(BaseModel):
+    name: str
+    url: str
+    category: str
+
+class HotspotIcon(HotspotIconBase):
+    id: int
+    owner_id: Optional[int] = None
+    class Config: from_attributes = True
+
+# --- Hotspot ---
 class HotspotBase(BaseModel):
-    text: str
     x: float
     y: float
     z: float
-    target_scene_id: Optional[int] = None # 允许为空，新建时可能未指定
+    text: Optional[str] = None
+    type: str = "scene"
+    content: Optional[str] = None
+    target_scene_id: Optional[int] = None
+    icon_type: str = "system"
+    icon_url: str = "arrow_move"
+    scale: float = 1.0
+    use_fixed_size: bool = False
 
 class HotspotCreate(HotspotBase):
     source_scene_id: int
 
-# [新增] 更新热点时的校验模型
 class HotspotUpdate(BaseModel):
     text: Optional[str] = None
-    target_scene_id: Optional[int] = None
     x: Optional[float] = None
     y: Optional[float] = None
     z: Optional[float] = None
+    type: Optional[str] = None
+    content: Optional[str] = None
+    target_scene_id: Optional[int] = None
+    icon_type: Optional[str] = None
+    icon_url: Optional[str] = None
+    scale: Optional[float] = None
+    use_fixed_size: Optional[bool] = None
 
 class Hotspot(HotspotBase):
     id: int
-    class Config:
-        from_attributes = True
+    class Config: from_attributes = True
 
-# Scene 修改：包含 group_id
+# --- Scene ---
 class Scene(BaseModel):
     id: int
     name: str
@@ -37,7 +69,6 @@ class Scene(BaseModel):
     cover_url: Optional[str] = None
     group_id: int
     hotspots: List[Hotspot] = []
-    
     initial_heading: float
     initial_pitch: float
     fov_min: float
@@ -47,11 +78,11 @@ class Scene(BaseModel):
     limit_h_max: float
     limit_v_min: float
     limit_v_max: float
+    sort_order: int = 0
     class Config: from_attributes = True
 
 class SceneUpdate(BaseModel):
-    # 允许更新所有参数
-    name: Optional[str] = None # 支持重命名场景
+    name: Optional[str] = None
     initial_heading: Optional[float] = None
     initial_pitch: Optional[float] = None
     fov_min: Optional[float] = None
@@ -63,45 +94,37 @@ class SceneUpdate(BaseModel):
     limit_v_max: Optional[float] = None
     cover_url: Optional[str] = None
 
-# [新增] SceneGroup Schema
+# --- Group ---
 class SceneGroupBase(BaseModel):
     name: str
-
 class SceneGroupCreate(SceneGroupBase):
     project_id: int
-
-class SceneGroupUpdate(BaseModel):
-    name: str
-
+class SceneGroupUpdate(SceneGroupBase):
+    pass
 class SceneGroup(SceneGroupBase):
     id: int
-    project_id: int
-    scenes: List[Scene] = [] # 分组下包含场景
+    scenes: List[Scene] = []
     class Config: from_attributes = True
 
-# Project 修改：scenes 变为 groups
+# --- Project ---
 class ProjectBase(BaseModel):
     name: str
     category: str
 
-class ProjectCreate(ProjectBase):
-    pass
-
 class Project(ProjectBase):
     id: int
     cover_url: Optional[str] = None
-    groups: List[SceneGroup] = [] # [修改] 这里变成了 groups
+    groups: List[SceneGroup] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    owner_id: Optional[int] = None
     class Config: from_attributes = True
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     category: Optional[str] = None
     cover_url: Optional[str] = None
-class HotspotUpdate(BaseModel):
-    text: Optional[str] = None
-    target_scene_id: Optional[int] = None
-    x: Optional[float] = None
-    y: Optional[float] = None
-    z: Optional[float] = None
+
+# --- Utils ---
+class ImageBase64(BaseModel):
+    image_data: str
