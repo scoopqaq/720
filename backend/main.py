@@ -8,21 +8,45 @@ import time
 from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from database import engine, Base, get_db
 import models, schemas
-# 引入 Auth 逻辑
-from auth import get_password_hash, verify_password, create_access_token, get_current_user
 
-# 1. 初始化
+from auth import get_password_hash, verify_password, create_access_token, get_current_user
+#标签栏，目的是为了区分不同API的功能
+tags_metadata = [
+    {
+        "name": "users",
+        "description": "用户相关操作，包括登录和注册功能。",
+    },
+    {
+        "name": "project",
+        "description": "项目管理相关代码，创建项目，删除项目，重命名项目名等",
+    },
+    {
+        "name":"scene",
+        "description":"场景以及场景组设置",
+    },
+    {
+        "name": "view",
+        "description": "查看器功能",
+    },
+    {
+        "name":"editor",
+        "description":"编辑器功能"
+    }
+]
+
 Base.metadata.create_all(bind=engine)
-app = FastAPI()
+app = FastAPI(openapi_tags=tags_metadata)
 
 # 2. CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    # 使用正则匹配所有来源，解决 IP 变动问题
+    allow_origin_regex="https?://.*", 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,17 +58,64 @@ os.makedirs("static/icons/system", exist_ok=True)
 os.makedirs("static/icons/custom", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- 4. 初始化默认图标 (可选) ---
 def init_system_icons():
-    # 简单示例，实际部署请手动放入图片
-    pass 
-init_system_icons()
+    print("正在全量同步系统图标...")
+    db = next(get_db())
+    system_dir = "static/icons/system"
+    
+    if not os.path.exists(system_dir):
+        os.makedirs(system_dir)
 
+    # 1. 获取【磁盘】上的真实文件集合
+    try:
+        disk_files = set([
+            f for f in os.listdir(system_dir) 
+            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg'))
+        ])
+    except Exception as e:
+        print(f"读取系统图标目录失败: {e}")
+        return
+
+    # 2. 获取【数据库】里的现有系统图标集合
+    db_icons = db.query(models.HotspotIcon).filter(models.HotspotIcon.category == "system").all()
+    # 建立 name -> icon对象 的映射，方便后面删除
+    db_icon_map = {icon.name: icon for icon in db_icons}
+    db_files = set(db_icon_map.keys())
+
+    # 3. 计算差异
+    to_add = disk_files - db_files      # 需要新增的
+    to_delete = db_files - disk_files   # 需要删除的
+
+    # 4. 执行新增
+    for filename in to_add:
+        icon = models.HotspotIcon(
+            name=filename,
+            url=f"/static/icons/system/{filename}",
+            category="system",
+            owner_id=None
+        )
+        db.add(icon)
+
+    # 5. 执行删除
+    for filename in to_delete:
+        print(f"检测到文件缺失，正在从数据库移除: {filename}")
+        db.delete(db_icon_map[filename])
+
+    # 6. 提交更改
+    if to_add or to_delete:
+        db.commit()
+        print(f"✅ 同步完成：新增 {len(to_add)} 个，删除 {len(to_delete)} 个")
+    else:
+        print("系统图标已是最新 (无变动)")
+
+# 启动时运行初始化
+init_system_icons()
 # ===========================
 #         Auth API
 # ===========================
 
-@app.post("/auth/register")
+#用户注册
+@app.post("/auth/register",tags=["users"])
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
     if db_user:
@@ -55,7 +126,8 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db.commit()
     return {"msg": "Registration successful"}
 
-@app.post("/auth/login", response_model=schemas.Token)
+#用户登录
+@app.post("/auth/login", response_model=schemas.Token,tags=["users"])
 def login(user: schemas.UserLogin, db: Session = Depends(get_db)):
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
     if not db_user or not verify_password(user.password, db_user.hashed_password):
@@ -64,26 +136,42 @@ def login(user: schemas.UserLogin, db: Session = Depends(get_db)):
     access_token = create_access_token(data={"sub": db_user.username})
     return {"access_token": access_token, "token_type": "bearer", "username": db_user.username}
 
+#fastapi文档登录测试专用接口
+@app.post("/auth/swagger_login", response_model=schemas.Token, include_in_schema=False)
+def login_for_docs(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    db_user = db.query(models.User).filter(models.User.username == form_data.username).first()
+    if not db_user or not verify_password(form_data.password, db_user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    
+    access_token = create_access_token(data={"sub": db_user.username})
+    return {"access_token": access_token, "token_type": "bearer", "username": db_user.username}
+
+
 # ===========================
 #         Project API
 # ===========================
-
-# [保护] 获取项目列表 (只看自己的)
-@app.get("/projects/", response_model=List[schemas.Project])
+#获取作品列表
+@app.get("/projects/", response_model=List[schemas.Project],tags=["project"])
 def get_projects(
     skip: int = 0, limit: int = 100, 
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    """
+    获得全部的作品资料，目的是载入用户的作品列表
+    """
     return db.query(models.Project).filter(models.Project.owner_id == current_user.id).order_by(models.Project.updated_at.desc()).offset(skip).limit(limit).all()
 
-# 获取详情 (需鉴权，防止看别人的)
-@app.get("/projects/{project_id}", response_model=schemas.Project)
+# 获取详情
+@app.get("/projects/{project_id}", response_model=schemas.Project,tags=["project"])
 def read_project(
     project_id: int, 
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    """
+    通过作品id获得详细的作品内容
+    """
     db_project = db.query(models.Project).filter(
         models.Project.id == project_id,
         models.Project.owner_id == current_user.id
@@ -98,8 +186,8 @@ def read_project(
         
     return db_project
 
-# [保护] 创建项目
-@app.post("/projects/create_full/", response_model=schemas.Project)
+# 创建项目
+@app.post("/projects/create_full/", response_model=schemas.Project,tags=["project"])
 def create_project_full(
     name: str = Form(...),
     category: str = Form(...),
@@ -134,7 +222,7 @@ def create_project_full(
     db.refresh(db_project)
     return db_project
 
-@app.post("/projects/batch_delete/")
+@app.post("/projects/batch_delete/",tags=["project"])
 def delete_projects(
     project_ids: List[int], 
     db: Session = Depends(get_db),
@@ -147,7 +235,7 @@ def delete_projects(
     db.commit()
     return {"ok": True}
 
-@app.put("/projects/{project_id}")
+@app.put("/projects/{project_id}",tags=["project"])
 def update_project(
     project_id: int, 
     project_update: schemas.ProjectUpdate, 
@@ -169,10 +257,13 @@ def update_project(
 # ===========================
 #      Group & Scene API 
 # ===========================
-# (为简化，这里暂不加严格的 owner 检查，因为这些操作通常在编辑器内，前提是已经获取了 Project 详情)
+# 场景以及场景组
 
 @app.post("/groups/", response_model=schemas.SceneGroup)
 def create_group(group: schemas.SceneGroupCreate, db: Session = Depends(get_db)):
+    """
+    创建一个新的场景组
+    """
     db_group = models.SceneGroup(**group.dict())
     db.add(db_group)
     # 更新时间
@@ -184,6 +275,9 @@ def create_group(group: schemas.SceneGroupCreate, db: Session = Depends(get_db))
 
 @app.put("/groups/{group_id}")
 def update_group(group_id: int, u: schemas.SceneGroupUpdate, db: Session = Depends(get_db)):
+    """
+    更新组名
+    """
     g = db.query(models.SceneGroup).filter(models.SceneGroup.id == group_id).first()
     if g:
         g.name = u.name
@@ -324,3 +418,35 @@ def upload_base64(data: schemas.ImageBase64):
         return {"url": f"/{fpath}"}
     except:
         raise HTTPException(status_code=500, detail="Upload failed")
+
+@app.delete("/icons/{icon_id}")
+def delete_icon(
+    icon_id: int, 
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. 查找图标 (必须是当前用户的 custom 图标)
+    icon = db.query(models.HotspotIcon).filter(
+        models.HotspotIcon.id == icon_id,
+        models.HotspotIcon.owner_id == current_user.id, # 关键：只能删自己的
+        models.HotspotIcon.category == "custom"          # 关键：不能删系统的
+    ).first()
+    
+    if not icon:
+        raise HTTPException(status_code=404, detail="图标不存在或无权删除")
+
+    # 2. 删除物理文件 (尝试删除，忽略错误以免数据库删不掉)
+    try:
+        # icon.url 格式通常是 /static/icons/custom/xxx.png
+        # 需要去掉开头的 /，转为相对路径
+        file_path = icon.url.lstrip("/")
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception as e:
+        print(f"文件删除失败: {e}")
+
+    # 3. 删除数据库记录
+    db.delete(icon)
+    db.commit()
+    
+    return {"ok": True}

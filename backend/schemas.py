@@ -37,7 +37,7 @@ class HotspotBase(BaseModel):
     content: Optional[str] = None
     target_scene_id: Optional[int] = None
     icon_type: str = "system"
-    icon_url: str = "arrow_move"
+    icon_url: str = "one"
     scale: float = 1.0
     use_fixed_size: bool = False
 

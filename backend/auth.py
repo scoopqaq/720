@@ -11,10 +11,11 @@ from database import get_db
 # 密钥配置 (真实生产环境要放在环境变量里)
 SECRET_KEY = "u8x/A?D(G+KbPeShVmYq3t6w9z$C&F)H@McQfTjWnZr4"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # Token 有效期 7 天
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login") # 指向登录接口
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/swagger_login")
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
@@ -29,7 +30,6 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-# 依赖函数：获取当前登录用户
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
