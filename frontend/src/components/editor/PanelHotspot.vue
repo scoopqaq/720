@@ -94,10 +94,6 @@
             <label>图标大小 ({{ localData.scale }})</label>
             <input type="range" min="0.1" max="5.0" step="0.1" v-model.number="localData.scale">
           </div>
-          <div class="form-group checkbox-row">
-            <input type="checkbox" id="fs" v-model="localData.use_fixed_size">
-            <label for="fs">固定屏幕大小 (不随距离缩放)</label>
-          </div>
         </div>
       </div>
 

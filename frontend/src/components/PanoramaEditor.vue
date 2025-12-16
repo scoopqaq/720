@@ -111,6 +111,7 @@ import SceneManager from './SceneManager.vue';
 import PanelBasic from './editor/PanelBasic.vue';
 import PanelHotspot from './editor/PanelHotspot.vue';
 import { authFetch, getImageUrl } from '../utils/api';
+import { GifTexture } from '../utils/GifLoader'; // 引入 GIF 加载器
 
 const props = defineProps(['projectId']);
 const emit = defineEmits(['back']);
@@ -118,6 +119,7 @@ const emit = defineEmits(['back']);
 const layoutRef = ref(null);
 const containerRef = ref(null);
 const iconTextures = {}; 
+const activeGifTextures = new Set(); // 存储当前活跃的 GIF 纹理以便更新
 
 const activeTab = ref('hotspot'); 
 const projectData = ref(null);
@@ -177,6 +179,9 @@ const fetchProject = async () => {
 };
 
 const loadScene = (sceneId) => {
+  // 切换场景前，清空 GIF 更新队列，避免更新不可见的纹理
+  activeGifTextures.clear();
+
   const target = scenes.value.find(s => s.id == sceneId);
   if (!target) return;
   currentScene.value = target;
@@ -189,7 +194,6 @@ const loadScene = (sceneId) => {
     target_scene_id: h.target_scene_id, position: [h.x, h.y, h.z],
     icon_type: h.icon_type, icon_url: h.icon_url, 
     scale: h.scale || 1.0, 
-    use_fixed_size: h.use_fixed_size || false,
     show_text: h.show_text || false 
   }));
   
@@ -243,7 +247,7 @@ const initThree = () => {
   containerRef.value.addEventListener('wheel', onMouseWheel, { passive: false });
   window.addEventListener('resize', onResize);
   window.addEventListener('click', closeMenu);
-  // [修复] 监听窗口失焦，防止拖拽卡死
+  
   window.addEventListener('blur', () => {
     isDraggingHotspot.value = false;
     controls.enabled = true;
@@ -251,7 +255,7 @@ const initThree = () => {
   animate();
 };
 
-const getBaseScale = (useFixed) => useFixed ? 0.06 : 30.0; 
+const getBaseScale = () => 30.0; 
 
 const getIconTexture = (hData) => {
   let url = '';
@@ -264,15 +268,32 @@ const getIconTexture = (hData) => {
 
   if (!url) return { isError: true };
 
-  if (!iconTextures[url]) {
-    iconTextures[url] = textureLoader.load(url, (tex) => { 
-        tex.colorSpace = THREE.SRGBColorSpace;
-        const rawMesh = toRaw(hData._mesh);
-        if(rawMesh) rawMesh.material.needsUpdate = true;
-    }, undefined, () => {
-        iconTextures[url].isError = true;
-    });
+  // 1. 检查缓存
+  if (iconTextures[url]) {
+    // 如果是 GIF，需要重新加入到更新队列中（因为 loadScene 时被清空了）
+    if (url.toLowerCase().endsWith('.gif')) {
+        activeGifTextures.add(iconTextures[url]);
+    }
+    return iconTextures[url];
   }
+
+  // 2. 处理 GIF
+  if (url.toLowerCase().endsWith('.gif')) {
+    const gifTexture = new GifTexture(url);
+    iconTextures[url] = gifTexture;
+    activeGifTextures.add(gifTexture);
+    return gifTexture;
+  }
+
+  // 3. 处理普通图片
+  iconTextures[url] = textureLoader.load(url, (tex) => { 
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const rawMesh = toRaw(hData._mesh);
+      if(rawMesh) rawMesh.material.needsUpdate = true;
+  }, undefined, () => {
+      iconTextures[url].isError = true;
+  });
+  
   return iconTextures[url];
 };
 
@@ -298,7 +319,6 @@ const createTextSprite = (message) => {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   
-  // markRaw 避免代理
   const sprite = markRaw(new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true })));
   const scaleFactor = 0.5; 
   sprite.scale.set(canvas.width / 10 * scaleFactor, canvas.height / 10 * scaleFactor, 1);
@@ -314,22 +334,22 @@ const rebuildHotspotMeshes = () => {
 
   hotspotList.value.forEach(hData => {
     let texture = getIconTexture(hData);
+    
+    // 强制开启 sizeAttenuation
     const matParams = { 
       map: texture,
       transparent: true, 
       depthTest: false, 
-      sizeAttenuation: !hData.use_fixed_size // 正确应用 sizeAttenuation
+      sizeAttenuation: true
     };
     if (texture.isError) matParams.color = 0xff0000;
 
-    // markRaw 避免代理
     const sprite = markRaw(new THREE.Sprite(new THREE.SpriteMaterial(matParams)));
     sprite.position.set(...hData.position);
     sprite.userData = { id: hData.id, isHotspot: true };
     sprite.renderOrder = 999;
     
-    // 初始化大小
-    const base = getBaseScale(hData.use_fixed_size);
+    const base = getBaseScale();
     const s = (hData.scale || 1.0) * base;
     sprite.scale.set(s, s, 1);
 
@@ -340,18 +360,12 @@ const rebuildHotspotMeshes = () => {
     if (hData.show_text && hData.text) {
       const label = createTextSprite(hData.text);
       label.position.copy(sprite.position);
-      if (hData.use_fixed_size) {
-         label.material.sizeAttenuation = false;
-         // 固定大小时，文字也需要特殊缩放
-         label.scale.multiplyScalar(0.003); 
-      }
       scene.add(label);
       labelMeshes.push(label);
       hData._labelMesh = label;
     }
   });
   
-  // 刷新选中状态
   if (selectedHotspot.value) {
     updateVisualSelection(selectedHotspot.value.id);
   }
@@ -360,9 +374,6 @@ const rebuildHotspotMeshes = () => {
 const updateVisualSelection = (id) => {
   hotspotMeshes.forEach(mesh => {
     const rawMesh = toRaw(mesh);
-    // 选中时给一点视觉反馈，比如不透明度或微小缩放
-    // 之前用了大圆圈，现在删掉了。
-    // 这里简单的让未选中的稍微透明一点
     if (rawMesh.userData.id === id) {
       rawMesh.material.opacity = 1.0;
     } else {
@@ -382,11 +393,9 @@ const onHotspotLiveUpdate = (updatedData) => {
      Object.assign(selectedHotspot.value, updatedData);
   }
   
-  // 涉及文字或大小模式改变，直接重建最稳妥
-  if (updatedData.show_text !== undefined || updatedData.text !== undefined || updatedData.use_fixed_size !== undefined) {
+  if (updatedData.show_text !== undefined || updatedData.text !== undefined) {
     rebuildHotspotMeshes();
   } else {
-    // 仅更新位置、图标、大小
     const rawMesh = toRaw(item._mesh);
     if (rawMesh) {
       if (updatedData.position) rawMesh.position.set(...updatedData.position);
@@ -397,7 +406,7 @@ const onHotspotLiveUpdate = (updatedData) => {
          rawMesh.material.needsUpdate = true;
       }
       
-      const base = getBaseScale(item.use_fixed_size);
+      const base = getBaseScale();
       const s = (updatedData.scale || 1.0) * base;
       rawMesh.scale.set(s, s, 1);
       
@@ -422,7 +431,6 @@ const getIntersects = (event, objects) => {
 const onPointerDown = (event) => {
   if (activeTab.value !== 'hotspot') return;
 
-  // 1. 全局检测点击
   const allHits = getIntersects(event, hotspotMeshes);
   
   if (allHits.length > 0) {
@@ -431,10 +439,8 @@ const onPointerDown = (event) => {
     const hitItem = hotspotList.value.find(h => h.id === hitId);
 
     if (hitItem) {
-      // 选中它
       selectHotspotByList(hitItem);
       
-      // 如果点击的是【当前已选中】的热点 -> 准备拖拽
       if (selectedHotspot.value && selectedHotspot.value.id === hitId) {
         isDraggingHotspot.value = true;
         dragTargetMesh.value = toRaw(hitMesh);
@@ -443,13 +449,11 @@ const onPointerDown = (event) => {
       }
     }
   } else {
-    // 点了空白处
     cancelHotspotSelection();
   }
 };
 
 const onPointerMove = (event) => {
-  // [修复] 防止浏览器失焦后，回来时鼠标没按着还在拖
   if (event.buttons === 0 && isDraggingHotspot.value) {
     onPointerUp();
     return;
@@ -466,22 +470,13 @@ const onPointerMove = (event) => {
     
     if (intersects.length > 0) {
       const point = intersects[0].point.normalize().multiplyScalar(450);
-      const newPos = [point.x, point.y, point.z];
       
-      // 直接移动 Mesh
+      // 拖拽时只动 3D 对象，不动 Vue 数据，防止闪烁
       dragTargetMesh.value.position.copy(point);
       
-      // 同步移动文字
-      const currentItem = hotspotList.value.find(h => h.id === selectedHotspot.value.id);
+      const currentItem = hotspotList.value.find(h => h.id === dragTargetMesh.value.userData.id);
       const rawLabel = toRaw(currentItem?._labelMesh);
       if (rawLabel) rawLabel.position.copy(point);
-
-      // 同步数据 (但不刷新整个列表，只改坐标)
-      if (selectedHotspot.value) {
-        selectedHotspot.value.position = newPos;
-        // 这里不要触发 liveUpdate，因为 mesh 已经动了，只改数据即可
-        // 否则 liveUpdate 会反复 set position，虽然也没事
-      }
     }
     return;
   }
@@ -500,13 +495,23 @@ const onPointerMove = (event) => {
 const onPointerUp = () => {
   if (isDraggingHotspot.value) {
     isDraggingHotspot.value = false;
-    dragTargetMesh.value = null;
     controls.enabled = true;
     
-    // 拖动结束后，确保数据同步到列表中，以便保存时取用
-    if (selectedHotspot.value) {
-       onHotspotLiveUpdate({ ...selectedHotspot.value });
+    if (dragTargetMesh.value && selectedHotspot.value) {
+      const finalPos = [
+        dragTargetMesh.value.position.x,
+        dragTargetMesh.value.position.y,
+        dragTargetMesh.value.position.z
+      ];
+
+      // 拖拽结束：同步坐标回 Vue 数据源
+      const listIdx = hotspotList.value.findIndex(h => h.id === selectedHotspot.value.id);
+      if (listIdx !== -1) {
+        hotspotList.value[listIdx].position = finalPos;
+      }
+      selectedHotspot.value = { ...selectedHotspot.value, position: finalPos };
     }
+    dragTargetMesh.value = null;
   }
 };
 
@@ -549,7 +554,7 @@ const createHotspotAtCenter = async () => {
     });
     if(res.ok) {
       const s = await res.json();
-      const hData = { id:s.id, text:'新建热点', type:'scene', position:pos, icon_type:'system', icon_url: s.icon_url, scale:1.0, use_fixed_size:false, show_text: false };
+      const hData = { id:s.id, text:'新建热点', type:'scene', position:pos, icon_type:'system', icon_url: s.icon_url, scale:1.0, show_text: false };
       hotspotList.value.push(hData);
       rebuildHotspotMeshes();
       selectHotspotByList(hData);
@@ -567,19 +572,17 @@ const cancelHotspotSelection = () => {
   updateVisualSelection(null);
 };
 
-// [修复保存重置] 保存时，必须从 3D Mesh 获取最新的位置，而不是仅依赖面板传来的数据
 const saveSelectedHotspot = async (panelData, silent = false) => {
   try {
-    // 1. 获取最新的位置
     const currentItem = hotspotList.value.find(i => i.id === panelData.id);
     let finalPos = panelData.position; 
     
+    // 优先取 3D Mesh 的位置，防止数据滞后
     if (currentItem && currentItem._mesh) {
       const rawMesh = toRaw(currentItem._mesh);
       finalPos = [rawMesh.position.x, rawMesh.position.y, rawMesh.position.z];
     }
 
-    // 2. 合并数据
     const payload = { 
       text: panelData.text, 
       target_scene_id: panelData.target_scene_id, 
@@ -587,7 +590,6 @@ const saveSelectedHotspot = async (panelData, silent = false) => {
       icon_type: panelData.icon_type, 
       icon_url: panelData.icon_url, 
       scale: panelData.scale, 
-      use_fixed_size: panelData.use_fixed_size,
       show_text: panelData.show_text, 
       content: panelData.content, 
       type: panelData.type
@@ -601,7 +603,6 @@ const saveSelectedHotspot = async (panelData, silent = false) => {
     if(res.ok) {
       const idx = hotspotList.value.findIndex(i=>i.id===panelData.id);
       if(idx!==-1) {
-        // 更新列表中的数据，同时保留原有的 Mesh 引用，防止闪烁
         const existingMesh = hotspotList.value[idx]._mesh;
         const existingLabel = hotspotList.value[idx]._labelMesh;
         hotspotList.value[idx] = { 
@@ -612,7 +613,6 @@ const saveSelectedHotspot = async (panelData, silent = false) => {
           _labelMesh: existingLabel 
         };
       }
-      // 不再调用 rebuildHotspotMeshes，避免重置
       if(!silent) alert("热点已保存");
     }
   } catch(e){ if(!silent) alert("保存失败"); }
@@ -649,7 +649,17 @@ const captureInitialState = () => { const az=controls.getAzimuthalAngle(); const
 const captureCover = async () => { renderer.render(scene,camera); const d=renderer.domElement.toDataURL('image/jpeg',0.7); try{ const r1=await authFetch('/upload_base64/',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_data:d})}); const d1=await r1.json(); await authFetch(`/scenes/${currentScene.value.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({cover_url:d1.url})}); alert("封面已更新"); fetchProject(); }catch(e){} };
 
 const onMouseWheel = (e) => { e.preventDefault(); let f=camera.fov+e.deltaY*0.05; f=Math.max(settings.fov_min, Math.min(settings.fov_max, f)); camera.fov=f; camera.updateProjectionMatrix(); };
-const animate = () => { animationId=requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); };
+const animate = () => { 
+  animationId = requestAnimationFrame(animate); 
+  
+  // 驱动 GIF 动画更新
+  activeGifTextures.forEach(texture => {
+    if (texture.update) texture.update();
+  });
+
+  controls.update(); 
+  renderer.render(scene,camera); 
+};
 const onResize = () => { if(containerRef.value){ camera.aspect=containerRef.value.clientWidth/containerRef.value.clientHeight; camera.updateProjectionMatrix(); renderer.setSize(containerRef.value.clientWidth,containerRef.value.clientHeight); } };
 const onContextMenu = (e) => { e.preventDefault(); menuPos.value = {x:e.clientX, y:e.clientY}; menuVisible.value = true; };
 const toggleDirection = () => { isReverse.value = !isReverse.value; controls.rotateSpeed = isReverse.value ? -0.5 : 0.5; };
@@ -663,7 +673,8 @@ onMounted(() => {
   window.addEventListener('beforeunload', onBeforeUnload); 
 });
 onBeforeUnmount(() => { 
-  cancelAnimationFrame(animationId); 
+  cancelAnimationFrame(animationId);
+  activeGifTextures.clear(); // 清理 GIF 引用
   window.removeEventListener('beforeunload', onBeforeUnload); 
   window.removeEventListener('resize', onResize); 
   window.removeEventListener('click', closeMenu);

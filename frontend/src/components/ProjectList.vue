@@ -74,9 +74,19 @@
 
           <div class="cover-wrapper">
             <img :src="getCoverImage(p)" loading="lazy" />
+            
             <div class="hover-overlay" v-if="!isSelectionMode">
-              <span>进入</span>
+              <div class="overlay-action left" @click.stop="$emit('select-project', p.id)">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                <span>预览</span>
+              </div>
+              
+              <div class="overlay-action right" @click.stop="$emit('enter-editor', p.id)">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                <span>编辑</span>
+              </div>
             </div>
+
             <div class="time-badge" v-if="p.updated_at">{{ formatTime(p.updated_at) }}</div>
           </div>
           
@@ -151,7 +161,7 @@
 
 <script setup>
 import { ref, computed, reactive, onMounted, onBeforeUnmount } from 'vue';
-import { authFetch, getImageUrl } from '../utils/api'; // [核心修正]
+import { authFetch, getImageUrl } from '../utils/api';
 
 const emit = defineEmits(['select-project', 'go-upload', 'enter-editor']);
 const gridRef = ref(null);
@@ -202,7 +212,7 @@ const filteredProjects = computed(() => {
 const fetchProjects = async () => {
   loading.value = true;
   try {
-    const res = await authFetch('/projects/'); // [修正] 使用 authFetch
+    const res = await authFetch('/projects/');
     if (res.ok) projects.value = await res.json();
   } catch (e) {
     console.error(e);
@@ -269,7 +279,6 @@ const checkSelectionIntersection = () => { if (!gridRef.value) return; const car
 const onMouseUp = () => { isDragging = false; dragBox.visible = false; window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
 const confirmBatchDelete = () => { if (selectedIds.value.length === 0) return; contextMenu.visible = false; modals.delete.ids = [...selectedIds.value]; modals.delete.visible = true; };
 
-// [修正] authFetch
 const executeDelete = async () => { 
   try { 
     const res = await authFetch('/projects/batch_delete/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modals.delete.ids) }); 
@@ -277,7 +286,6 @@ const executeDelete = async () => {
   } catch (err) { alert("删除失败"); } 
 };
 const openRenameModal = (project) => { modals.rename.project = project; modals.rename.tempName = project.name; modals.rename.tempCategory = project.category; modals.rename.visible = true; };
-// [修正] authFetch
 const executeRename = async () => { 
   const p = modals.rename.project; 
   try { 
@@ -291,7 +299,6 @@ onBeforeUnmount(() => { window.removeEventListener('click', closeMenu); });
 </script>
 
 <style scoped>
-/* 保持样式不变 */
 .list-wrapper { min-height: 100vh; background-color: #f5f7fa; padding: 20px; font-family: 'PingFang SC', sans-serif; user-select: none; position: relative; }
 .content-container { max-width: 1400px; margin: 0 auto; }
 .toolbar-container { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 24px; padding: 16px 24px; }
@@ -333,10 +340,37 @@ onBeforeUnmount(() => { window.removeEventListener('click', closeMenu); });
 .cover-wrapper { height: 160px; background: #f5f5f5; position: relative; overflow: hidden; }
 .cover-wrapper img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s; }
 .project-card:hover img { transform: scale(1.05); }
-.hover-overlay { position: absolute; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.2); display: flex; justify-content: center; align-items: center; opacity: 0; transition: opacity 0.2s; }
+
+/* [修改] 悬停层布局 */
+.hover-overlay {
+  position: absolute; top:0; left:0; width:100%; height:100%; 
+  background: rgba(0,0,0,0.4); 
+  display: flex; 
+  opacity: 0; 
+  transition: opacity 0.2s; 
+  backdrop-filter: blur(2px); 
+}
 .project-card:hover .hover-overlay { opacity: 1; }
-.hover-overlay span { color: white; border: 1px solid rgba(255,255,255,0.8); padding: 4px 12px; border-radius: 20px; font-size: 12px; backdrop-filter: blur(4px); }
-.time-badge { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.9); font-size: 10px; padding: 2px 6px; border-radius: 4px; }
+
+/* [新增] 左右操作区样式 */
+.overlay-action {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  transition: all 0.2s;
+  gap: 6px;
+}
+.overlay-action span { font-size: 13px; font-weight: 500; }
+.overlay-action.left { border-right: 1px solid rgba(255,255,255,0.15); }
+.overlay-action:hover { background: rgba(52, 152, 219, 0.85); color: white; }
+.overlay-action.right:hover { background: rgba(46, 204, 113, 0.85); }
+
+.time-badge { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.9); font-size: 10px; padding: 2px 6px; border-radius: 4px; pointer-events: none; }
 .card-info { padding: 14px; }
 .project-name { margin: 0 0 8px; font-size: 15px; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.4; }
 .meta-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #999; }
