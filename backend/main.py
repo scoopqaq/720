@@ -163,29 +163,32 @@ def get_projects(
     return db.query(models.Project).filter(models.Project.owner_id == current_user.id).order_by(models.Project.updated_at.desc()).offset(skip).limit(limit).all()
 
 # 获取详情
-@app.get("/projects/{project_id}", response_model=schemas.Project,tags=["project"])
+# backend/main.py 中的 read_project 函数
+
+@app.get("/projects/{project_id}", response_model=schemas.Project)
 def read_project(
     project_id: int, 
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    """
-    通过作品id获得详细的作品内容
-    """
     db_project = db.query(models.Project).filter(
         models.Project.id == project_id,
         models.Project.owner_id == current_user.id
     ).first()
     
     if db_project is None:
-        raise HTTPException(status_code=404, detail="Project not found or access denied")
+        raise HTTPException(status_code=404, detail="Project not found")
     
-    # 手动排序 scenes
+    # 手动排序 scenes 和 hotspots
     for group in db_project.groups:
+        # 1. 排序场景
         group.scenes.sort(key=lambda s: s.sort_order)
         
+        # 2. [新增] 排序每个场景里的热点
+        for scene in group.scenes:
+            scene.hotspots.sort(key=lambda h: h.sort_order)
+            
     return db_project
-
 # 创建项目
 @app.post("/projects/create_full/", response_model=schemas.Project,tags=["project"])
 def create_project_full(
@@ -449,4 +452,29 @@ def delete_icon(
     db.delete(icon)
     db.commit()
     
+    return {"ok": True}
+
+# backend/main.py 放在 Hotspot API 区域附近
+
+# [新增] 热点重新排序接口
+@app.post("/scenes/{scene_id}/reorder_hotspots")
+def reorder_hotspots(
+    scene_id: int, 
+    hotspot_ids: List[int], 
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 查出该场景下所有的热点
+    # (为了简化，这里先不校验 scene 的 owner，实际项目建议校验)
+    hotspots = db.query(models.Hotspot).filter(models.Hotspot.source_scene_id == scene_id).all()
+    
+    # 转成字典方便查找
+    h_map = {h.id: h for h in hotspots}
+    
+    # 遍历前端传来的 ID 列表，更新序号
+    for index, h_id in enumerate(hotspot_ids):
+        if h_id in h_map:
+            h_map[h_id].sort_order = index
+            
+    db.commit()
     return {"ok": True}

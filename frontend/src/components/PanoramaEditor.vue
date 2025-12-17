@@ -97,6 +97,7 @@
           @batch-delete="batchDeleteHotspots"
           @cancel="cancelHotspotSelection"
           @refresh-icons="fetchIcons"
+          @reorder="onHotspotReorder"
         />
       </aside>
     </div>
@@ -157,6 +158,27 @@ const cursorStyle = computed(() => {
 });
 
 // --- API ---
+const onHotspotReorder = async (newList) => {
+  // 1. 立即更新前端视图，保证流畅
+  hotspotList.value = newList;
+  
+  // 2. 提取 ID 列表
+  const ids = newList.map(h => h.id);
+  
+  // 3. 发送给后端
+  try {
+    await authFetch(`/scenes/${currentScene.value.id}/reorder_hotspots`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ids)
+    });
+    // 可选：静默成功，不需要弹窗打扰用户
+    console.log('顺序已保存');
+  } catch (e) {
+    console.error('排序保存失败', e);
+    alert('排序保存失败，请检查网络');
+  }
+};
 const fetchIcons = async () => {
   try {
     const res = await authFetch('/icons/');

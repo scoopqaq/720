@@ -95,6 +95,7 @@ class Hotspot(Base):
     icon_url = Column(String, default="arrow_move") 
     scale = Column(Float, default=1.0)
     use_fixed_size = Column(Boolean, default=False)
+    sort_order = Column(Integer, default=0)
     
     source_scene_id = Column(Integer, ForeignKey("scenes.id"))
     source_scene = relationship("Scene", foreign_keys=[source_scene_id], back_populates="hotspots")

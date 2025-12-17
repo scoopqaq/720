@@ -13,12 +13,10 @@
             <label>热点名称</label>
             <input type="text" v-model="localData.text" class="form-input" placeholder="请输入名称">
           </div>
-          
           <div class="form-group checkbox-row">
              <input type="checkbox" id="showText" v-model="localData.show_text">
              <label for="showText">在场景中显示名称</label>
           </div>
-
           <div class="form-group">
             <label>交互类型</label>
             <select v-model="localData.type" class="form-select">
@@ -29,7 +27,6 @@
               <option value="video">🎬 视频播放 (弹窗)</option>
             </select>
           </div>
-          
           <div v-if="localData.type === 'scene'" class="form-group">
             <label>目标场景</label>
             <select v-model="localData.target_scene_id" class="form-select">
@@ -37,22 +34,18 @@
               <option v-for="s in otherScenes" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>
           </div>
-
           <div v-if="localData.type === 'link'" class="form-group">
             <label>链接地址 (URL)</label>
             <input type="text" v-model="localData.content" class="form-input" placeholder="https://...">
           </div>
-
           <div v-if="localData.type === 'image'" class="form-group">
              <label>图片地址 (URL)</label>
              <input type="text" v-model="localData.content" class="form-input">
           </div>
-          
           <div v-if="localData.type === 'text'" class="form-group">
             <label>提示内容</label>
             <textarea v-model="localData.content" class="form-input" rows="3"></textarea>
           </div>
-
           <div v-if="localData.type === 'video'" class="form-group">
             <label>视频嵌入代码 (iframe)</label>
             <textarea v-model="localData.content" class="form-input" rows="4" placeholder='<iframe src="..."></iframe>'></textarea>
@@ -65,7 +58,6 @@
             <span :class="{active: iconTab==='system'}" @click="iconTab='system'">系统图标</span>
             <span :class="{active: iconTab==='custom'}" @click="iconTab='custom'">自定义</span>
           </div>
-
           <div class="icon-grid-wrapper">
             <div class="icon-grid">
               <div 
@@ -78,18 +70,15 @@
               >
                 <img :src="getImageUrl(icon.url)" class="icon-img" />
               </div>
-              
               <div v-if="iconTab === 'custom'" class="icon-item upload" @click="triggerIconUpload">
                 <input type="file" ref="iconInput" style="display:none" accept="image/*" @change="handleIconUpload">
                 <span>+</span>
               </div>
             </div>
           </div>
-          
           <div v-if="iconTab === 'custom'" style="font-size:12px; color:#666; margin-top:5px;">
             提示：右键点击图标可删除
           </div>
-
           <div class="form-group" style="margin-top: 15px;">
             <label>图标大小 ({{ localData.scale }})</label>
             <input type="range" min="0.1" max="5.0" step="0.1" v-model.number="localData.scale">
@@ -118,29 +107,56 @@
         <span :class="{active: filterType === 'link'}" @click="filterType = 'link'">链接</span>
         <span :class="{active: filterType === 'text'}" @click="filterType = 'text'">文字</span>
         <span :class="{active: filterType === 'image'}" @click="filterType = 'image'">图片</span>
-        <span :class="{active: filterType === 'video'}" @click="filterType = 'video'">视频</span>
       </div>
 
       <div class="list-header">
-        <span>共 {{ filteredList.length }} 个热点</span>
+        <span>共 {{ isFiltering ? filteredList.length : list.length }} 个热点</span>
         <button v-if="selectedIds.length>0" class="btn-text danger" @click="batchDelete">删除选中</button>
       </div>
 
       <div class="hotspot-list">
-        <div v-if="filteredList.length === 0" class="empty-tip">无匹配热点</div>
-        <div 
-          v-for="h in filteredList" 
-          :key="h.id" 
-          class="list-item" 
-          @click.stop="$emit('select', h)"
-        >
-          <input type="checkbox" :value="h.id" v-model="selectedIds" @click.stop>
-          <img :src="getImageUrl(h.icon_url)" class="list-thumb" />
-          <div class="list-info">
-             <span class="name">{{ h.text || '未命名热点' }}</span>
-             <span class="type-tag">{{ getTypeName(h.type) }}</span>
+        <template v-if="isFiltering">
+          <div v-if="filteredList.length === 0" class="empty-tip">无匹配热点</div>
+          <div 
+            v-for="h in filteredList" 
+            :key="h.id" 
+            class="list-item" 
+            @click.stop="$emit('select', h)"
+          >
+            <input type="checkbox" :value="h.id" v-model="selectedIds" @click.stop>
+            <img :src="getImageUrl(h.icon_url)" class="list-thumb" />
+            <div class="list-info">
+               <span class="name">{{ h.text || '未命名热点' }}</span>
+               <span class="type-tag">{{ getTypeName(h.type) }}</span>
+            </div>
           </div>
-        </div>
+        </template>
+
+        <template v-else>
+          <draggable 
+            v-model="proxyList" 
+            item-key="id"
+            handle=".drag-handle"
+            ghost-class="ghost-item"
+            animation="200"
+          >
+            <template #item="{ element: h }">
+              <div class="list-item" @click.stop="$emit('select', h)">
+                <div class="drag-handle" title="按住拖动排序">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="#666"><path d="M9 3h2v18H9V3zm4 0h2v18h-2V3z"/></svg>
+                </div>
+
+                <input type="checkbox" :value="h.id" v-model="selectedIds" @click.stop>
+                <img :src="getImageUrl(h.icon_url)" class="list-thumb" />
+                <div class="list-info">
+                   <span class="name">{{ h.text || '未命名热点' }}</span>
+                   <span class="type-tag">{{ getTypeName(h.type) }}</span>
+                </div>
+              </div>
+            </template>
+          </draggable>
+          <div v-if="list.length === 0" class="empty-tip">暂无热点，点击上方按钮创建</div>
+        </template>
       </div>
     </div>
 
@@ -159,10 +175,11 @@
 
 <script setup>
 import { ref, watch, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
+import draggable from 'vuedraggable'; // [新增] 引入拖拽组件
 import { getImageUrl, authFetch } from '../../utils/api';
 
 const props = defineProps(['list', 'selectedHotspot', 'otherScenes', 'icons']);
-const emit = defineEmits(['create', 'save', 'delete', 'select', 'cancel', 'batch-delete', 'refresh-icons', 'live-update']);
+const emit = defineEmits(['create', 'save', 'delete', 'select', 'cancel', 'batch-delete', 'refresh-icons', 'live-update', 'reorder']);
 
 const localData = reactive({});
 const iconTab = ref('system');
@@ -172,6 +189,20 @@ const iconMenu = reactive({ visible: false, x: 0, y: 0, targetIcon: null });
 
 const searchQuery = ref('');
 const filterType = ref('all');
+
+// 判断当前是否处于筛选状态
+const isFiltering = computed(() => {
+  return searchQuery.value.trim() !== '' || filterType.value !== 'all';
+});
+
+// 计算属性：用于 v-model 绑定拖拽组件
+// 使用 get/set 来代理 props.list，当拖拽发生时，发射事件给父组件
+const proxyList = computed({
+  get: () => props.list,
+  set: (newVal) => {
+    emit('reorder', newVal); // 通知父组件更新列表顺序
+  }
+});
 
 const filteredList = computed(() => {
   if (!props.list) return [];
@@ -239,7 +270,7 @@ const deleteCustomIcon = async () => {
       emit('refresh-icons');
       if (localData.icon_url === iconMenu.targetIcon.url) {
         localData.icon_type = 'system';
-        localData.icon_url = 'one'; 
+        // 尝试找个默认的，或者不做处理让前端显示红块提醒用户
       }
     } else { alert("删除失败"); }
   } catch (e) { alert("网络错误"); } finally { iconMenu.visible = false; }
@@ -259,6 +290,7 @@ onBeforeUnmount(() => window.removeEventListener('click', closeMenu));
 </script>
 
 <style scoped>
+/* 保持大部分原有样式，新增拖拽相关样式 */
 .panel-content { display: flex; flex-direction: column; height: 100%; color: #ccc; padding: 20px; }
 .header-row { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
 .btn-icon { background: none; border: 1px solid #555; color: #ddd; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
@@ -270,13 +302,23 @@ onBeforeUnmount(() => window.removeEventListener('click', closeMenu));
 .filter-tabs span.active { background: #3498db; color: white; }
 .empty-tip { text-align: center; color: #555; margin-top: 20px; font-size: 13px; }
 
-.list-item { display: flex; align-items: center; gap: 10px; padding: 10px; background: #2b2b2b; margin-bottom: 5px; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
-.list-item:hover { background: #333; }
+/* 列表项样式调整 */
+.list-item { display: flex; align-items: center; gap: 10px; padding: 10px; background: #2b2b2b; margin-bottom: 5px; border-radius: 4px; cursor: pointer; transition: background 0.2s; border: 1px solid transparent; }
+.list-item:hover { background: #333; border-color: #444; }
 .list-info { flex: 1; display: flex; flex-direction: column; }
 .name { font-size: 13px; color: #eee; }
 .type-tag { font-size: 10px; color: #888; margin-top: 2px; }
 .list-thumb { width: 32px; height: 32px; object-fit: contain; background: rgba(0,0,0,0.3); border-radius: 4px; }
 
+/* [新增] 拖拽手柄样式 */
+.drag-handle { cursor: grab; padding: 0 4px; display: flex; align-items: center; opacity: 0.5; }
+.drag-handle:hover { opacity: 1; }
+.list-item:active .drag-handle { cursor: grabbing; }
+
+/* [新增] 拖拽占位符样式 */
+.ghost-item { opacity: 0.5; background: #3498db; border: 1px dashed #fff; }
+
+/* 其他表单样式保持不变 */
 .section-block { margin-bottom: 20px; }
 .form-group { margin-bottom: 15px; }
 .form-group label { display: block; font-size: 12px; margin-bottom: 5px; color: #aaa; }
